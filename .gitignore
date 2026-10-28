@@ -4,3 +4,6 @@ matches/
 replays/
 bots/*/build/
 bots/*/target/
+*.cache/
+*.DS_Store
+.vscode

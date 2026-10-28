@@ -33,6 +33,20 @@ cambc::bitboard blocked_tiles() {
     return blocked;
 }
 
+int dist_to_closest_goal(vec2 position, cambc::bitboard goals) {
+    const auto blocked = blocked_tiles();
+    goals &= ~blocked | cambc::vision::camp_tiles();
+    if (goals.is_empty())
+        return false;
+
+    // Expand from the goals until our current tile is reached.
+    const auto path_walls = blocked & ~goals;
+    cambc::distance_field field;
+    cambc::bitboard visited;
+    field.compute_to(path_walls, goals, tiles_around(position, 0), visited);
+    return field.get(position);
+}
+
 bool move_towards_closest(cambc::bitboard goals) {
     auto& me = cambc::self();
     if (!me.can_move() || goals.is_set(me.position()))
@@ -112,6 +126,53 @@ void farm_camps() {
         attack_first_in_range(cambc::vision::camps());
 }
 
+void go_to_spawn(bool attacked) {
+    auto& me = cambc::self();
+    cambc::bitboard ally_spawns = cambc::map::spawn_region(team::ally);
+    if (dist_to_closest_goal(me.position(), ally_spawns) <= 5 || attacked) {
+        if (me.is_recalling()) me.cancel_recall();
+        move_towards_closest(ally_spawns);
+    }
+    else {
+        me.recall();
+    }
+}
+
+void flee() {
+    auto me = cambc::self();
+    auto threats = cambc::vision::champion_tiles(team::enemy) | cambc::vision::awake_camp_tiles();
+    if (threats.is_empty()) {
+        go_to_spawn(false);
+        return;
+    }
+    if (dist_to_closest_goal(me.position(), threats) > 5) {
+        go_to_spawn(false);
+        return;
+    }
+    cambc::bitboard visited;
+    cambc::distance_field field;
+    field.compute(blocked_tiles() & ~threats, threats, visited);
+    std::optional<vec2> best = std::nullopt;
+    int best_score = -1;
+    for (auto dir : Bot::directions) {
+        vec2 new_position = me.position() + dir;
+        if (!cambc::map::is_in_bounds(new_position)) continue;
+        if (blocked_tiles().is_set(new_position)) continue;
+        int score = 10 * field.get(new_position) - dist_to_closest_goal(new_position, cambc::map::spawn_region(team::ally));
+        if (score > best_score) {
+            best = dir;
+            best_score = score;
+        }
+    }
+    if (best != std::nullopt) me.move(*best); 
+    else go_to_spawn(true);
+}
+
+float curr_power() {
+    auto& me = cambc::self();
+    return me.health() * me.strength();
+}
+
 void Bot::play_turn() {
     // Initialise this champion's build and read the draft message once.
     if (chosen_stat < 0) {
@@ -140,7 +201,10 @@ void Bot::play_turn() {
 
     // Recall immediately when badly hurt away from spawn.
     if (!at_spawn && me.health() < me.max_health() * 0.35f) {
-        me.recall();
+        me.set_priority(1);
+        flee();
+        //me.recall();
+        
         return;
     }
 
