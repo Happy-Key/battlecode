@@ -83,6 +83,36 @@ void Bot::buy_items() {
     if (count && me.can_buy(item, count)) me.buy(item, count);
 }
 
+template<class Target>
+bool is_valid_target_in_range(const Target& target, cambc::bitboard range) {
+    return target.is_visible() && range.is_set(target.position()) && target.health() > 0;
+}
+
+template<class Target>
+void barrage(const Target& target) {
+    auto& me = cambc::self();
+    cambc::bitboard attack_tiles = me.attack_tiles();
+    if (is_valid_target_in_range(target, attack_tiles)) me.attack(target);
+    for (auto a : me.abilities()) {
+        if (a.is_on_cooldown()) continue;
+        if (a.is_damage() || a.is_cc() || a.is_aoe_damage()) {
+            cambc::bitboard tiles_in_range = a.valid_tiles();
+            if (is_valid_target_in_range(target, tiles_in_range)) {
+                if (a.can_target_enemies() || a.can_target_camps()) a.use(target);
+                if (a.can_target_ground()) a.use(target.position());
+                return;
+            }
+        }
+        if (a.is_attack_reset()) {
+            if (is_valid_target_in_range(target, attack_tiles)) {
+                a.use(me);
+                me.attack(target);
+                return;
+            }
+        }
+    }
+}
+
 // Compute the attack mask once, rather than once per visible target.
 template<class Targets>
 bool attack_first_in_range(const Targets& targets) {
@@ -91,7 +121,7 @@ bool attack_first_in_range(const Targets& targets) {
     const auto attack_tiles = me.attack_tiles();
     for (const auto& target : targets) {
         if (target.is_visible() && attack_tiles.is_set(target.position()) && target.health() > 0) {
-            me.attack(target);
+            barrage(target);
             return true;
         }
     }
