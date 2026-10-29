@@ -5,7 +5,9 @@
 #include <iostream>
 #include "random.h"
 #include <cstdint>
+#include <map>
 #include <span>
+#include <unordered_map>
 #include <variant>
 #include <utility>
 #include <vector>
@@ -31,6 +33,18 @@ cambc::bitboard blocked_tiles() {
         | cambc::vision::camp_tiles() | cambc::vision::teleport_tiles();
     blocked.set(cambc::self().position(), false);
     return blocked;
+}
+
+int dist_to_closest(vec2 position, cambc::bitboard goals) {
+    if (goals.is_empty())
+        return false;
+    const auto blocked = blocked_tiles();
+    // Expand from the goals until our current tile is reached.
+    const auto path_walls = blocked & ~goals;
+    cambc::distance_field field;
+    cambc::bitboard visited;
+    field.compute_to(path_walls, goals, tiles_around(position, 0), visited);
+    return field.get(position);
 }
 
 bool move_towards_closest(cambc::bitboard goals) {
@@ -62,11 +76,20 @@ bool move_towards_closest(cambc::bitboard goals) {
 
 void Bot::buy_items() {
     auto& me = cambc::self();
-    const std::array items{cambc::item_type::power_shard_of_strength,
-        cambc::item_type::power_shard_of_focus, cambc::item_type::power_shard_of_health};
+    const std::array items{cambc::item_type::bruiser_shard_of_strength,
+        cambc::item_type::bruiser_shard_of_health, cambc::item_type::bruiser_shard_of_focus};
     const auto item = items[chosen_stat];
-    const unsigned count = me.gold_count() / item.cost();
-    if (count && me.can_buy(item, count)) me.buy(item, count);
+    int count = me.gold_count() / item.cost();
+    bool rebuy = false;
+    if (count + me.item_count()[items[chosen_stat]] >= 5) {
+        count = 5 - me.item_count()[items[chosen_stat]];
+        rebuy = true;
+    }
+    if (count > 0 && me.can_buy(item, count)) me.buy(item, count);
+    if (rebuy) {
+        chosen_stat = random_number(3);
+        if (count > 0) buy_items();
+    }
 }
 
 // Compute the attack mask once, rather than once per visible target.
@@ -112,59 +135,136 @@ void farm_camps() {
         attack_first_in_range(cambc::vision::camps());
 }
 
-void Bot::play_turn() {
-    // Initialise this champion's build and read the draft message once.
-    if (chosen_stat < 0) {
-        chosen_stat = random_number(3);
-        std::cout << "draft: " << std::string(reinterpret_cast<const char*>(cambc::draft_memory.data()), 11) << '\n';
+void go_to_spawn(bool attacked) {
+    auto& me = cambc::self();
+    cambc::bitboard ally_spawns = cambc::map::spawn_region(team::ally);
+    if (dist_to_closest(me.position(), ally_spawns) <= 5 || attacked) {
+        move_towards_closest(ally_spawns);
     }
+    else {
+        me.recall();
+    }
+}
 
-    // Read before writing: little-endian u32 at shared-memory byte offset zero.
-    std::uint32_t round = 0;
-    cambc::shared_memory.read(0, std::span{&round, 1});
-    std::cout << "shared round: " << round << '\n';
-    round = cambc::round_number();
-    cambc::shared_memory.write(0, std::span{&round, 1});
+void flee() {
+    auto me = cambc::self();
+    auto threats = cambc::vision::champion_tiles(team::enemy) | cambc::vision::awake_camp_tiles();
+    if (threats.is_empty()) {
+        go_to_spawn(false);
+        return;
+    }
+    cambc::bitboard visited;
+    cambc::distance_field field;
+    field.compute(blocked_tiles() & ~threats, threats, visited);
+    std::optional<vec2> best = std::nullopt;
+    int base = field.get(me.position());
+    for (auto dir : Bot::directions) {
+        vec2 new_position = me.position() + dir;
+        if (!cambc::map::is_in_bounds(new_position)) continue;
+        if (blocked_tiles().is_set(new_position)) continue;
+        if (field.get(new_position) > base) {
+            me.move(dir);
+            return;
+        }
+    }
+    go_to_spawn(true);
+}
 
+void Bot::initialize_id() {
+    auto& me = cambc::self();
+    id = type_to_id[me.champion_name()];
+    std::cout << id;
+}
+
+void Bot::create_champ_type_id_dicts() {
+    std::uint8_t numChamps = reinterpret_cast<const std::uint8_t*>(cambc::draft_memory.data())[0];
+    for (int i = 0; i < numChamps; i++) {
+        id_to_type[i] = reinterpret_cast<const cambc::champion_type*>(cambc::draft_memory.data())[i+1];
+        type_to_id[reinterpret_cast<const cambc::champion_type*>(cambc::draft_memory.data())[i+1]] = i;
+    }
+}
+
+void Bot::choose_state() {
+    auto& me = cambc::self();
+    double health_pct = me.health() / me.max_health();
+    switch(curr_state) {
+        case State::FLEE:
+            if (health_pct >= 0.50) curr_state = State::FARM;
+            [[__fallthrough__]];
+        case State::FARM:
+            if (cambc::vision::awake_camp_tiles().is_empty() && me.gem_count() >= 20) curr_state = State::TRIB;
+            else if (me.gem_count() > 0) {
+                std::uint32_t isTribbing = cambc::shared_memory[0];
+                for (cambc::champion champ : cambc::vision::champions()) {
+                    if ((isTribbing & (1 << type_to_id[champ.champion_name()])) != 0) curr_state = State::TRIB;
+                }
+            }
+            [[__fallthrough__]];
+        case State::TRIB:
+            if (me.gem_count() == 0) {
+                curr_state = State::FARM;
+            }
+            [[__fallthrough__]];
+        default:
+            if (health_pct < 0.35) {
+                curr_state = State::FLEE;
+                break;
+            }
+    }
+}
+
+void Bot::play_turn() {
+    if (id < 0) {
+        create_champ_type_id_dicts();
+        initialize_id();
+    }
     auto& me = cambc::self();
 
-    // Leave channels running and skip turns where we cannot act.
-    if (!me.is_alive() || me.is_recalling() || me.is_submitting_gems() || me.is_teleporting()
-        || (!me.can_move() && !me.can_attack()))
+    // Hard skip
+    if (!me.is_alive() || !me.can_move() && !me.can_attack())
         return;
-
+    //Soft skip (should consider whether to cancel)
+    if (me.is_recalling() || me.is_submitting_gems() || me.is_teleporting())
+        return;
+    
     // Shop before leaving spawn.
     const bool at_spawn = cambc::map::spawn_region(team::ally).is_set(me.position());
     if (at_spawn)
         buy_items();
 
-    // Recall immediately when badly hurt away from spawn.
-    if (!at_spawn && me.health() < me.max_health() * 0.35f) {
-        me.recall();
-        return;
-    }
+    choose_state();
 
-    // Attack the first enemy champion already in range.
-    if (attack_first_in_range(cambc::vision::champions(team::enemy))) return;
+    std::uint32_t isTribbing = 0;
+    cambc::shared_memory.read(0, std::span{&isTribbing, 1});
+    isTribbing &= ~(1 << id);
+    cambc::shared_memory.write(0, std::span{&isTribbing, 1});
 
-    // Bank any carried gems before farming.
-    if (me.gem_count() > 0) {
-        // Union all altar approach tiles: the field chooses the nearest reachable altar.
-        cambc::bitboard goals;
-        goals.clear();
-        for (auto altar : cambc::map::altars().positions()) {
-            if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
-                && !cambc::vision::has_altar_lock(altar)) {
-                    me.submit_gems(altar);
-                    return;
-                }
-            if (!cambc::vision::has_altar_lock(altar)) goals |= tiles_around(altar, cambc::constants::submit_gems_range);
+    switch(curr_state) {
+        case State::FLEE:
+            flee();
+            break;
+        case State::FARM:
+            farm_camps();
+            break;
+        case State::TRIB: {
+            std::uint32_t isTribbing = 0;
+            cambc::shared_memory.read(0, std::span{&isTribbing, 1});
+            isTribbing |= 1 << id;
+            cambc::shared_memory.write(0, std::span{&isTribbing, 1});
+            cambc::bitboard goals;
+            goals.clear();
+            for (auto altar : cambc::map::altars().positions()) {
+                if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
+                    && !cambc::vision::has_altar_lock(altar)) {
+                        me.submit_gems(altar);
+                        return;
+                    }
+                if (!cambc::vision::has_altar_lock(altar)) goals |= tiles_around(altar, cambc::constants::submit_gems_range);
+            }
+            move_towards_closest(goals);
+            return;
         }
-        move_towards_closest(goals);
-        return;
+        default:
+            break;
     }
-
-    farm_camps();
-
-    me.set_priority(1 + random_number(100));
 }

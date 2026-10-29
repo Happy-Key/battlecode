@@ -6,18 +6,9 @@
 
 class Bot {
     int chosen_stat = -1;
-    int curr_state = State::FARM;
 
     // Spend only on power shards of the randomly chosen stat.
     void buy_items();
-
-
-    enum State{
-        FIGHT,
-        FARM,
-        FLEE,
-        FLOCK
-    };
 
     
 

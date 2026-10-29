@@ -8,8 +8,9 @@ int main() {
     Bot bot;
     while (true) {
         try {
-            if (cambc::is_draft())
+            if (cambc::is_draft()) {
                 play_draft();
+            }
             else
                 bot.play_turn();
         } catch (const std::exception& error) {
