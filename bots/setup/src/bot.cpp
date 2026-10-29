@@ -192,19 +192,17 @@ void flee() {
     cambc::distance_field field;
     field.compute(blocked_tiles() & ~threats, threats, visited);
     std::optional<vec2> best = std::nullopt;
-    int best_score = -1;
+    int base = field.get(me.position());
     for (auto dir : Bot::directions) {
         vec2 new_position = me.position() + dir;
         if (!cambc::map::is_in_bounds(new_position)) continue;
         if (blocked_tiles().is_set(new_position)) continue;
-        int score = 10 * field.get(new_position) - dist_to_closest_goal(new_position, cambc::map::spawn_region(team::ally));
-        if (score > best_score) {
-            best = dir;
-            best_score = score;
+        if (field.get(new_position) > base) {
+            me.move(dir);
+            return;
         }
     }
-    if (best != std::nullopt) me.move(*best); 
-    else go_to_spawn(true);
+    go_to_spawn(true);
 }
 
 float curr_power() {
@@ -227,6 +225,7 @@ void Bot::play_turn() {
     cambc::shared_memory.write(0, std::span{&round, 1});
 
     auto& me = cambc::self();
+    me.set_priority(5 + random_number(100));
 
     // Leave channels running and skip turns where we cannot act.
     if (!me.is_alive() || me.is_recalling() || me.is_submitting_gems() || me.is_teleporting()
@@ -269,5 +268,5 @@ void Bot::play_turn() {
 
     farm_camps();
 
-    me.set_priority(1 + random_number(100));
+    
 }
