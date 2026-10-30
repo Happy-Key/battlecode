@@ -2,6 +2,7 @@
 #include "draft.h"
 #include "bot.h"
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -156,36 +157,19 @@ void play_draft() {
         }
     }
     
-    cambc::bitboard altars;
-    altars.clear();
-    for (auto a : relevant_altars) {
-        altars.set(a);
-    }
-    auto camps = get_best_camps(altars, {{5,10},{3,40},{1,100}});
-    std::vector<std::uint8_t> camp_buffer;
-    camp_buffer.push_back(camps.size());
-    for (int i = 0; i < camps.size(); i++) camp_buffer.push_back(camps[i].size());
-    for (int i = 0; i < camps.size(); i++) {
-        for (int j = 0; j < camps[i].size(); j++) {
-            camp_buffer.push_back(camps[i][j].x);
-            camp_buffer.push_back(camps[i][j].y);
-            if (cambc::draft::current_draft(cambc::team::ally).size() == 0) {
-                std::cout << "good camp at x: " << camps[i][j].x << ", y: " << camps[i][j].y << std::endl;
-            }
-        }
-    }
-    /*
     std::vector<std::uint8_t> camp_buffer;
     for (int i = 0; i < cambc::map::camp_groups().size(); i++) {
         auto c = cambc::map::camp_groups()[i];
         int total_health = 0;
         int total_strength = 0;
         for (int j = 0; j < c.camps().size(); j++) {
-            total_health += c.camps()[j].max_health();
-            total_strength += c.camps()[j].strength();
+            total_health += c.camps()[j].base_stats().base_health;
+            total_strength += c.camps()[j].base_stats().base_strength;
         }
-        camp_buffer.push_back(total_health * total_strength);
-    } */
+        camp_buffer.push_back(std::sqrt(total_health * total_strength / 10000));
+        std::cout << i << ": " << std::sqrt(total_health * total_strength / 10000) << ", ";
+    }
+    std::cout << std::endl;
 
     std::vector<std::uint8_t> memory_buffer;
     std::size_t offset = 0;

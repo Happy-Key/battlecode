@@ -8,10 +8,8 @@
 class Bot {
     int chosen_stat = 0;
     int curr_state = State::FARM;
-    std::optional<cambc::vec2> curr_target;
     int rotation = 0;
     int id = -1;
-    std::vector<uint8_t> difficulties = {10, 40, 100};
     
     void buy_items();
 
@@ -21,6 +19,7 @@ public:
         FARM,
         TRIB,
         FIND,
+        CLAIM,
     };
     static constexpr cambc::vec2 directions[] = {{0,1}, {1,1}, {1,0}, {1,-1}, {0,-1}, {-1,-1}, {-1,0}, {-1,1}};
     std::unordered_map<std::uint8_t, cambc::champion_type> id_to_type;
@@ -28,12 +27,16 @@ public:
     std::vector<cambc::vec2> good_altars;
     std::vector<uint8_t> camp_group_known_cooldowns;
     std::vector<uint8_t> camp_group_difficulties;
-    std::vector<std::vector<cambc::vec2>> target_camps;
+    std::vector<cambc::bitboard> camp_spawns;
+    cambc::bitboard difficulty_mask;
+    cambc::bitboard goal_mask;
     
     void play_turn();
     void choose_state();
     void initialize_id();
     void create_champ_type_id_dicts();
-    cambc::bitboard target_camps_bitboard(int power);
-    void find_target_camp();
+    void set_difficulty_mask(int power);
+    void calculate_goal_mask();
+    void begin_finding();
+    void observe();
 };
