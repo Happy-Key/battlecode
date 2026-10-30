@@ -6,6 +6,8 @@
 #include "random.h"
 #include <cstdint>
 #include <map>
+#include <optional>
+#include <ostream>
 #include <span>
 #include <unordered_map>
 #include <variant>
@@ -14,6 +16,49 @@
 
 using cambc::vec2;
 using cambc::team;
+
+std::vector<std::uint8_t> read_from_draft(int vec_index) {
+    cambc::draft_memory_buffer memory = cambc::draft_memory;    
+    
+    std::uint8_t num_vec = static_cast<std::uint8_t>(memory[0]);
+    std::size_t offset = 1 + num_vec;
+    for (std::uint8_t i = 0; i < vec_index; i++) {
+        offset += (std::uint8_t)memory[1 + i];
+    }
+    std::size_t length = (int)memory[1 + vec_index];
+    std::vector<std::uint8_t> result;
+    for (auto a = memory.begin() + offset; a < memory.begin() + offset + length; a++) {
+        result.push_back((std::uint8_t)*a);
+    }
+
+    return result;
+}
+
+std::vector<vec2> uint_stream_to_vecs(std::vector<std::uint8_t> stream) {
+    std::vector<vec2> result(stream.size() / 2);
+    for (auto a = stream.begin(); a < stream.end(); a += 2) {
+        result.push_back(vec2((int)*a,(int)*(a+1)));
+    }
+    return result;
+}
+
+std::vector<std::vector<cambc::vec2>> uint_stream_to_camps(std::vector<std::uint8_t> stream) {
+    int num_categories = stream[0];
+    std::vector<int> cat_sizes(num_categories);
+    int offset = 1;
+    for (int i = 0; i < num_categories; i++) {
+        cat_sizes[i] = stream[offset];
+        offset += 1;
+    }
+    std::vector<std::vector<cambc::vec2>> result(num_categories);
+    for (int i = 0; i < num_categories; i++) {
+        for (int j = 0; j < cat_sizes[i]; j++) {
+            result[i].push_back(cambc::vec2(stream[offset],stream[offset+1]));
+            offset += 2;
+        }
+    }
+    return result;
+}
 
 int distance(vec2 a, vec2 b) {
     return static_cast<int>(a.chebyshev_distance(b));
@@ -92,6 +137,36 @@ void Bot::buy_items() {
     }
 }
 
+template<class Target>
+bool is_valid_target_in_range(const Target& target, cambc::bitboard range) {
+    return target.is_visible() && range.is_set(target.position()) && target.health() > 0;
+}
+
+template<class Target>
+void barrage(const Target& target) {
+    auto& me = cambc::self();
+    cambc::bitboard attack_tiles = me.attack_tiles();
+    if (is_valid_target_in_range(target, attack_tiles)) me.attack(target);
+    for (auto a : me.abilities()) {
+        if (a.is_on_cooldown()) continue;
+        if (a.is_damage() || a.is_cc() || a.is_aoe_damage()) {
+            cambc::bitboard tiles_in_range = a.valid_tiles();
+            if (is_valid_target_in_range(target, tiles_in_range)) {
+                if (a.can_target_enemies() || a.can_target_camps()) a.use(target);
+                if (a.can_target_ground()) a.use(target.position());
+                return;
+            }
+        }
+        if (a.is_attack_reset()) {
+            if (is_valid_target_in_range(target, attack_tiles)) {
+                a.use(me);
+                me.attack(target);
+                return;
+            }
+        }
+    }
+}
+
 // Compute the attack mask once, rather than once per visible target.
 template<class Targets>
 bool attack_first_in_range(const Targets& targets) {
@@ -100,11 +175,41 @@ bool attack_first_in_range(const Targets& targets) {
     const auto attack_tiles = me.attack_tiles();
     for (const auto& target : targets) {
         if (target.is_visible() && attack_tiles.is_set(target.position()) && target.health() > 0) {
-            me.attack(target);
+            barrage(target);
             return true;
         }
     }
     return false;
+}
+
+int curr_power() {
+    auto me = cambc::self();
+    return me.health() * me.strength() / 2000;
+}
+
+cambc::bitboard Bot::target_camps_bitboard(int power) {
+    int i = difficulties.size() - 1;
+    for (; i >= 0; i--) {
+        if (power >= difficulties[i]) break;
+    }
+    cambc::bitboard result;
+    result.clear();
+    for (auto a : target_camps[i]) {
+        result.set(a);
+    }
+    return result;
+}
+
+void Bot::find_target_camp() {
+    auto me = cambc::self();
+    auto possible_targets = target_camps_bitboard(curr_power());
+    if (possible_targets.is_empty()) {
+        curr_target = std::nullopt;
+        return;
+    }
+    int num_targets = possible_targets.positions().size();
+    curr_target = possible_targets.positions()[rotation % num_targets];
+    rotation += random_number(4);
 }
 
 // Attack a camp already in range, otherwise move toward the nearest camp tiles.
@@ -133,6 +238,8 @@ void farm_camps() {
     // Fresh vision after movement may reveal a camp already in range.
     if (move_towards_closest(goals))
         attack_first_in_range(cambc::vision::camps());
+
+    if (cambc::self().can_move()) move_towards_closest(cambc::vision::awake_camp_tiles());
 }
 
 void go_to_spawn(bool attacked) {
@@ -173,38 +280,62 @@ void flee() {
 void Bot::initialize_id() {
     auto& me = cambc::self();
     id = type_to_id[me.champion_name()];
-    std::cout << id;
+    std::cout << "My id is: " << id << std::endl;
 }
 
 void Bot::create_champ_type_id_dicts() {
-    std::uint8_t numChamps = reinterpret_cast<const std::uint8_t*>(cambc::draft_memory.data())[0];
-    for (int i = 0; i < numChamps; i++) {
-        id_to_type[i] = reinterpret_cast<const cambc::champion_type*>(cambc::draft_memory.data())[i+1];
-        type_to_id[reinterpret_cast<const cambc::champion_type*>(cambc::draft_memory.data())[i+1]] = i;
+    std::vector<std::uint8_t> chosen_champ_types = read_from_draft(0);
+    for (int i = 0; i < chosen_champ_types.size(); i++) {
+        id_to_type[i] = (cambc::champion_type)chosen_champ_types[i];
+        type_to_id[(cambc::champion_type)chosen_champ_types[i]] = i;
     }
 }
 
 void Bot::choose_state() {
     auto& me = cambc::self();
     double health_pct = me.health() / me.max_health();
+    if (health_pct < 0.35) {
+        curr_state = State::FLEE;
+        return;
+    }
     switch(curr_state) {
         case State::FLEE:
-            if (health_pct >= 0.50) curr_state = State::FARM;
-            [[__fallthrough__]];
+            if (health_pct >= 0.50) curr_state = State::FIND;
+            break;
+        case State::FIND:
+            if (curr_target.has_value()) {if (cambc::vision::in_vision(curr_target.value())) curr_state = FARM;}
+            else curr_state = FARM;
+            break;
         case State::FARM:
-            if (cambc::vision::awake_camp_tiles().is_empty() && me.gem_count() >= 20) curr_state = State::TRIB;
+            if (cambc::vision::awake_camp_tiles().is_empty() && me.gem_count() >= 20) {
+                curr_state = State::TRIB;
+                return;
+            }
             else if (me.gem_count() > 0) {
                 std::uint32_t isTribbing = cambc::shared_memory[0];
                 for (cambc::champion champ : cambc::vision::champions()) {
-                    if ((isTribbing & (1 << type_to_id[champ.champion_name()])) != 0) curr_state = State::TRIB;
+                    if ((isTribbing & (1 << type_to_id[champ.champion_name()])) != 0) {
+                        curr_state = State::TRIB;
+                        return;
+                    }
                 }
             }
-            [[__fallthrough__]];
+            if (!cambc::vision::camp_groups().empty() && curr_target.has_value()) {
+                for (auto a : cambc::vision::camp_groups()) {
+                    if (a.state().index() != 2) {
+                        if (a.spawn_tiles().is_set(curr_target.value())) return;
+                    }
+                }
+                curr_state = State::FIND;
+                return;
+            }
+            else curr_state = State::FIND;
+            break;
         case State::TRIB:
             if (me.gem_count() == 0) {
-                curr_state = State::FARM;
+                curr_state = State::FIND;
             }
-            [[__fallthrough__]];
+            break;
         default:
             if (health_pct < 0.35) {
                 curr_state = State::FLEE;
@@ -217,6 +348,8 @@ void Bot::play_turn() {
     if (id < 0) {
         create_champ_type_id_dicts();
         initialize_id();
+        good_altars = uint_stream_to_vecs(read_from_draft(1));
+        target_camps = uint_stream_to_camps(read_from_draft(2));
     }
     auto& me = cambc::self();
 
@@ -243,8 +376,20 @@ void Bot::play_turn() {
         case State::FLEE:
             flee();
             break;
+        case State::FIND:
+            if (!curr_target.has_value())find_target_camp();
+            if (curr_target.has_value()) me.move_towards(curr_target.value());
+            else farm_camps();
+            break;
         case State::FARM:
             farm_camps();
+            if (curr_target.has_value()) {
+                for (auto a : cambc::vision::camp_groups()) {
+                    if (a.spawn_tiles().is_set(curr_target.value())) {
+                        if (a.state().index() == 2) curr_target = std::nullopt;
+                    }
+                }
+            }
             break;
         case State::TRIB: {
             std::uint32_t isTribbing = 0;
@@ -253,7 +398,7 @@ void Bot::play_turn() {
             cambc::shared_memory.write(0, std::span{&isTribbing, 1});
             cambc::bitboard goals;
             goals.clear();
-            for (auto altar : cambc::map::altars().positions()) {
+            for (auto altar : good_altars) {
                 if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
                     && !cambc::vision::has_altar_lock(altar)) {
                         me.submit_gems(altar);
@@ -267,4 +412,6 @@ void Bot::play_turn() {
         default:
             break;
     }
+
+    std::cout << curr_state << std::endl;
 }
