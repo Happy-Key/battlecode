@@ -179,7 +179,7 @@ void Bot::buy_items() {
     }
     if (count > 0 && me.can_buy(item, count)) {
         me.buy(item, count);
-        if (!rebuy) set_difficulty_mask(stat_power(me));
+        //if (!rebuy) set_difficulty_mask(stat_power(me));
     }
     if (rebuy) {
         chosen_stat = random_number(3);
