@@ -296,9 +296,11 @@ void Bot::initialize_id() {
 void Bot::create_champ_type_id_dicts() {
     std::vector<std::uint8_t> chosen_champ_types = read_from_draft(0);
     for (int i = 0; i < chosen_champ_types.size(); i++) {
+        std::cout << (int)chosen_champ_types[i] << ", ";
         id_to_type[i] = (cambc::champion_type)chosen_champ_types[i];
         type_to_id[(cambc::champion_type)chosen_champ_types[i]] = i;
     }
+    std::cout << std::endl;
 }
 
 void Bot::set_difficulty_mask(int power) {
@@ -393,7 +395,6 @@ void Bot::choose_state() {
                 }
                 begin_finding();
             }
-            /*
             if (me.gem_count() > 0) {
                 std::uint32_t isTribbing = cambc::shared_memory[0];
                 for (cambc::champion champ : cambc::vision::champions()) {
@@ -403,7 +404,6 @@ void Bot::choose_state() {
                     }
                 }
             }
-                */
             break;
         case State::TRIB:
             if (me.gem_count() == 0) {
