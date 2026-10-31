@@ -8,22 +8,21 @@
 #include <cstdlib>
 #include <ostream>
 #include <string_view>
-#include <set>
+#include <unordered_set>
 #include <vector>
 #include "random.h"
 #include <iostream>
 
-const int CONTESTED_ZONE_SIZE = 20;
+const int CONTESTED_ZONE_SIZE = 15;
 const int CASSI_AND_ISSAC_INDEX = 3;
 
 cambc::bitboard perma_blocked_tiles() {
-    auto blocked = cambc::map::walls() | cambc::map::holes() | cambc::map::altars();
+    auto blocked = cambc::map::walls() | cambc::map::holes();
     return blocked;
 }
 
-cambc::distance_field goal_field(cambc::bitboard goals) {
-    cambc::distance_field field;
-    if (goals.is_empty()) return field;
+void goal_field(cambc::bitboard goals, cambc::distance_field& field) {
+    if (goals.is_empty()) return;
 
     const auto blocked = perma_blocked_tiles();
     // Expand from the goals until our current tile is reached.
@@ -31,12 +30,13 @@ cambc::distance_field goal_field(cambc::bitboard goals) {
     cambc::bitboard visited;
 
     field.compute(path_walls, goals,visited);
-    return field;
 }
 
 bool get_relevant_altars(std::vector<cambc::vec2>& ours , std::vector<cambc::vec2>& contested, int k) {
-    cambc::distance_field home = goal_field(cambc::map::spawn_region(cambc::team::ally));
-    cambc::distance_field opp = goal_field(cambc::map::spawn_region(cambc::team::enemy));
+    cambc::distance_field home;
+    goal_field(cambc::map::spawn_region(cambc::team::ally), home);
+    cambc::distance_field opp;
+    goal_field(cambc::map::spawn_region(cambc::team::enemy), opp);
 
     for(cambc::vec2 pos : cambc::map::altars().positions()) {
         int diff = opp.get(pos) - home.get(pos);
@@ -46,6 +46,7 @@ bool get_relevant_altars(std::vector<cambc::vec2>& ours , std::vector<cambc::vec
         else if (abs(diff) <= CONTESTED_ZONE_SIZE) {
             contested.push_back(pos);
         }
+        std::cout << diff << ", ";
     }
 
     auto sorter = [home](const cambc::vec2 a, const cambc::vec2 b){
@@ -61,8 +62,10 @@ bool get_relevant_altars(std::vector<cambc::vec2>& ours , std::vector<cambc::vec
 
 std::vector<std::vector<cambc::vec2>> get_best_camps(cambc::bitboard altars, 
     std::vector<std::pair<std::uint8_t, std::uint8_t>> num_camp_per_type) {
-    cambc::distance_field home = goal_field(cambc::map::spawn_region(cambc::team::ally));
-    cambc::distance_field altar = goal_field(altars);
+    cambc::distance_field home;
+    goal_field(cambc::map::spawn_region(cambc::team::ally), home);
+    cambc::distance_field altar;
+    goal_field(altars, altar);
     static const auto camp_groups = [home, altar] {
         std::vector<std::tuple<cambc::map::camp_group, std::uint8_t, std::uint8_t>> groups;
         for (const auto& group : cambc::map::camp_groups()) {
@@ -76,7 +79,7 @@ std::vector<std::vector<cambc::vec2>> get_best_camps(cambc::bitboard altars,
             }
             int difficulty = total_health * total_strength / 10000;
             groups.emplace_back(group, value, difficulty);
-            std::cout << "Value: " << value << ", x: " << group.spawn_tiles().positions()[0].x << ", y: " << group.spawn_tiles().positions()[0].y << std::endl;
+            //std::cout << "Value: " << value << ", x: " << group.spawn_tiles().positions()[0].x << ", y: " << group.spawn_tiles().positions()[0].y << std::endl;
         }
         return groups;
     }();
@@ -103,25 +106,35 @@ std::vector<std::vector<cambc::vec2>> get_best_camps(cambc::bitboard altars,
 std::vector<std::uint8_t> pick_champions() {
     // Choose randomly from the champions our team has not picked.
     std::vector<std::uint8_t> result;
-    std::set<std::uint8_t> seen;
+    std::unordered_set<std::uint8_t> seen = {};
     int max = cambc::draft::team_size();
     while (result.size() < max) {
-        std::uint8_t rand = random_number(12);
-        if (seen.contains(rand)) continue;
+        std::uint8_t rand = (std::uint8_t)random_number(12);
+        if (seen.count(rand) > 0) {
+            //std::cout << "dupe" << std::endl;
+            continue;
+        }
         seen.insert(rand);
+        for (auto a : seen) {
+            //std::cout << (int)a << " ";
+        }
+        //std::cout << seen.size() << " ";
+        //std::cout << (int)rand << std::endl;
         if (rand == CASSI_AND_ISSAC_INDEX) {
             result.push_back(rand);
             result.push_back(rand+1);
             max++;
         }
-        if (rand > CASSI_AND_ISSAC_INDEX) {
+        else if (rand > CASSI_AND_ISSAC_INDEX) {
             result.push_back(rand+1);
         }
         else {
             result.push_back(rand);
         }
     }
-
+    for (auto a : result) {
+            //std::cout << (int)a << " ";
+        }
     return result;
 }
 
@@ -142,6 +155,7 @@ void play_draft() {
         bool noEZAltars = get_relevant_altars(ours, contested, 3);
         if (noEZAltars) {
             relevant_altars = contested;
+            std::cout << "contested" << std::endl;
         }
         else {
             relevant_altars = ours;
@@ -153,7 +167,7 @@ void play_draft() {
         }
         if (cambc::draft::current_draft(cambc::team::ally).size() == 0) {
             for (auto a = altar_buffer.begin(); a < altar_buffer.end(); a += 2) {
-                //std::cout << "good altar at x: " << (int)*a << ", y: " << (int)*(a+1) << std::endl;
+                std::cout << "good altar at x: " << (int)*a << ", y: " << (int)*(a+1) << std::endl;
             }
         }
         
@@ -167,7 +181,7 @@ void play_draft() {
                 total_strength += c.camps()[j].base_stats().base_strength;
             }
             camp_buffer.push_back(std::sqrt(total_health * total_strength / 10000));
-            //std::cout << i << ": " << std::sqrt(total_health * total_strength / 10000) << ", ";
+            std::cout << i << ": " << std::sqrt(total_health * total_strength / 10000) << ", ";
         }
         //std::cout << std::endl;
         std::vector<std::uint8_t> memory_buffer;
@@ -176,8 +190,8 @@ void play_draft() {
         insert_vector(memory_buffer, altar_buffer, offset);
         insert_vector(memory_buffer, camp_buffer, offset);
         memory_buffer.insert(memory_buffer.begin(), (uint8_t)3);
-        for (int i = 0; i < 10; i++) {
-            //std::cout << (int)*(memory_buffer.begin() + i) << " ";
+        for (int i = 0; i < 20; i++) {
+            std::cout << (int)*(memory_buffer.begin() + i) << " ";
         }
         //std::cout << std::endl;
         cambc::draft_memory = memory_buffer;
@@ -185,19 +199,20 @@ void play_draft() {
 
     cambc::draft_memory_buffer memory = cambc::draft_memory_buffer();    
     uint8_t pick = (uint8_t)*(1 + memory.begin() + (int)*memory.begin() + cambc::round_number());
-    for (int i = 0; i < cambc::round_number(); i++) {
+    for (int i = 0; i < cambc::round_number()+1; i++) {
         if ((uint8_t)memory[1 + (int)memory[0] + i] == CASSI_AND_ISSAC_INDEX) {
-            if (i == cambc::round_number() - 1) {
+            if (i == cambc::round_number()) {
                 cambc::draft::pick((cambc::champion_draft)CASSI_AND_ISSAC_INDEX);
                 return;
             }
             else {
-                pick = (uint8_t)memory[2 + (int)memory[0] + cambc::round_number()];
+                pick = (uint8_t)*(2 + memory.begin() + (int)*memory.begin() + cambc::round_number());
                 break;
             }
         }
     }
     if (pick > CASSI_AND_ISSAC_INDEX) --pick;
+    std::cout << (int)pick << std::endl;
     cambc::draft::pick((cambc::champion_draft)pick);
-    std::cout << (int)*(1 + memory.begin() + (int)*memory.begin() + cambc::round_number()) << std::endl;
+    
 }

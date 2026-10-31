@@ -36,7 +36,7 @@ std::vector<std::uint8_t> read_from_draft(int vec_index) {
 }
 
 std::vector<vec2> uint_stream_to_vecs(std::vector<std::uint8_t> stream) {
-    std::vector<vec2> result(stream.size() / 2);
+    std::vector<vec2> result;
     for (auto a = stream.begin(); a < stream.end(); a += 2) {
         result.push_back(vec2((int)*a,(int)*(a+1)));
     }
@@ -98,27 +98,6 @@ int dist_to_closest(vec2 position, cambc::bitboard goals) {
     return field.get(position);
 }
 
-bool move_to_closest(cambc::bitboard goals) {
-    auto& me = cambc::self();
-    auto blocked = blocked_tiles();
-    //goals &= ~blocked | cambc::vision::camp_tiles();
-    const auto path_walls = blocked & ~goals;
-    cambc::distance_field field;
-    cambc::bitboard visited;
-    field.compute_to(path_walls, goals, tiles_around(me.position(), 0), visited);
-    auto step = me.position();
-    for (auto tile : blocked.reachable_tiles(step, me.base_stats().base_move_speed).positions()) {
-        if (field.get(tile) < field.get(step))  {
-            step = tile;
-            break;
-        }
-        if (field.get(tile) == field.get(step)) {
-            step = tile;
-        }
-    }
-    return step != me.position() && me.move_absolute(step);
-}
-
 bool move_towards_closest(cambc::bitboard goals) {
     auto& me = cambc::self();
     if (!me.can_move() || goals.is_set(me.position()))
@@ -146,9 +125,45 @@ bool move_towards_closest(cambc::bitboard goals) {
     return step != me.position() && me.move_absolute(step);
 }
 
+cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitboard pixels) {
+    cambc::distance_field field;
+    cambc::bitboard visited;
+    // 1. Compute distances from 'a'
+    field.compute(blocked_tiles(), board, visited);
+
+    // 2. Get the raw pointer to the distance values
+    const std::uint16_t* dist_ptr = field.ptr();
+    std::int32_t map_width = field.width();
+
+    std::optional<cambc::vec2> closest_b_pixel = std::nullopt;
+    std::uint16_t min_distance = 0xFFFF;
+
+    // 3. Loop through b's positions using direct array lookup instead of field.get(p)
+    for (const cambc::vec2& p : pixels.positions()) {
+        if (visited.is_set(p)) {
+            // Linear index for row-major order: y * width + x
+            std::size_t index = static_cast<std::size_t>(p.y) * map_width + p.x;
+            std::uint16_t dist = dist_ptr[index];
+            
+            if (dist < min_distance) {
+                min_distance = dist;
+                closest_b_pixel = p;
+            }
+        }
+    }
+    cambc::bitboard result;
+    result.clear();
+    result.set(*closest_b_pixel);
+    return result;
+}
+
+int stat_power(cambc::champion target) {
+    std::cout << "my power: " << std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 7000) << std::endl;
+    return (int)(std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 7000));
+}
+
 int curr_power(cambc::champion target) {
-    std::cout << "my power: " << std::sqrt(target.max_health() * target.strength() / 5000) << std::endl;
-    return (int)(std::sqrt(target.max_health() * target.strength() / 5000));
+    return (int)(std::sqrt(target.health() * (target.strength() + target.focus() / 2) / 7000));
 }
 
 void Bot::buy_items() {
@@ -164,7 +179,7 @@ void Bot::buy_items() {
     }
     if (count > 0 && me.can_buy(item, count)) {
         me.buy(item, count);
-        if (!rebuy) set_difficulty_mask(curr_power(me));
+        if (!rebuy) set_difficulty_mask(stat_power(me));
     }
     if (rebuy) {
         chosen_stat = random_number(3);
@@ -218,7 +233,15 @@ bool attack_first_in_range(const Targets& targets) {
 }
 
 // Attack a camp already in range, otherwise move toward the nearest camp tiles.
-void farm_camps() {
+void Bot::farm_camps() {
+    auto goal_camps = cambc::vision::camps();
+    for (int i = 0; i < goal_camps.size(); i++) {
+        if (!goal_mask.is_set(goal_camps[i].position())) {
+            goal_camps.erase(goal_camps.begin() + i);
+            i--;
+        }
+    }
+    if (attack_first_in_range(goal_camps)) return;
     if (attack_first_in_range(cambc::vision::camps())) return;
 
     // Cache fixed spawn locations; only visible respawn state changes each turn.
@@ -237,7 +260,8 @@ void farm_camps() {
     const auto visible = cambc::vision::visible_tiles();
     for (const auto& [group, spawns] : camp_groups)
         if (!(spawns & visible).is_empty()
-            && std::holds_alternative<cambc::map::camp_group_respawning>(group.state()))
+            && (std::holds_alternative<cambc::map::camp_group_respawning>(group.state())
+            ||  std::holds_alternative<cambc::map::camp_group_reward_available>(group.state())))
             goals &= ~spawns;
 
     // Fresh vision after movement may reveal a camp already in range.
@@ -245,6 +269,28 @@ void farm_camps() {
         attack_first_in_range(cambc::vision::camps());
 
     if (cambc::self().can_move()) move_towards_closest(cambc::vision::awake_camp_tiles());
+}
+
+void Bot::tribute() {
+    auto me = cambc::self();
+    cambc::bitboard goals;
+    goals.clear();
+    cambc::distance_field home;
+    cambc::bitboard visited;
+    home.compute(blocked_tiles(), cambc::map::spawn_region(team::ally), visited);
+    
+    for (auto altar : cambc::map::altars().positions()) {
+        if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
+            && !cambc::vision::has_altar_lock(altar)) {
+                me.submit_gems(altar);
+                return;
+            }
+        if (!cambc::vision::has_altar_lock(altar)) {
+            if (good_altars.contains(altar) || home.get(altar) < home.get(me.position()))
+                goals |= tiles_around(altar, cambc::constants::submit_gems_range);
+        }
+    }
+    move_towards_closest(goals);
 }
 
 void Bot::begin_finding() {
@@ -284,6 +330,8 @@ void flee() {
             return;
         }
     }
+    field.compute(blocked_tiles() & ~threats, threats, visited, 5);
+    if (move_towards_closest(~visited & ~ blocked_tiles())) return;
     go_to_spawn(true);
 }
 
@@ -303,60 +351,113 @@ void Bot::create_champ_type_id_dicts() {
     std::cout << std::endl;
 }
 
-void Bot::set_difficulty_mask(int power) {
-    std::vector<cambc::map::camp_group> valid;
-    std::cout << "manageable: ";
-    for (int i = 0; i < camp_group_difficulties.size(); i++) {
-        if (power >= camp_group_difficulties[i]) {
-            valid.push_back(cambc::map::camp_groups()[i]);
-            std::cout << i << ", ";
-        }
-    }
-    std::cout << std::endl;
-    difficulty_mask.clear();
-    for (auto a : valid) {
-        difficulty_mask |= a.spawn_tiles();
-    }
-}
-
 void Bot::calculate_goal_mask() {
     std::cout << "cgm: disabled ";
+    /*
     goal_mask = difficulty_mask;
     for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
         if (camp_group_known_cooldowns[i] > 0) {
-            goal_mask &= ~cambc::map::camp_groups()[i].spawn_tiles();
+            goal_mask &= ~camp_spawns[i];
             std::cout << i << ", ";
         }
     }
+    */
+    std::vector<int> valid;
+    int pow = stat_power(cambc::self());
+    for (int mult = 1; mult <= 4; mult *= 2) {
+        for (int i = 0; i < get_static_camp_groups().size(); i++) {
+            if (camp_group_known_cooldowns[i] > 0) continue;
+            if (mult * pow < camp_group_difficulties[i]) continue;
+            valid.push_back(i);
+            //std::cout << "gotem" << std::endl;
+        }
+        if (!valid.empty()) break;
+        valid.clear();
+        std::cout << "empower me" << std::endl;
+    }
+    cambc::distance_field home;
+    cambc::distance_field me;
+    cambc::bitboard self;
+    self.set(cambc::self().position());
+    cambc::bitboard visited;
+    cambc::bitboard blocked = cambc::map::walls() | cambc::map::holes() | cambc::map::altars()
+        | cambc::map::spawn_region(team::enemy);
+    home.compute(blocked, cambc::map::spawn_region(team::ally), visited);
+    visited.clear();
+    me.compute(blocked, self, visited);
+    int best = -1;
+    float best_score = 10000;
+    for (int i = 0; i < valid.size(); i++) {
+        vec2 camp_pos = get_static_camp_groups()[valid[i]].spawn_tiles().positions()[0];
+        int gems = get_static_camp_groups()[valid[i]].gem_value();
+        int gold = get_static_camp_groups()[valid[i]].gold_value();
+        float score = home.get(camp_pos) * 0.1 + me.get(camp_pos) - 0.2 * gems - 0.01 * gold;
+        if (score < best_score) {
+            best_score = score;
+            best = valid[i];
+        }
+    }
+    goal_mask.clear();
+    auto a = get_static_camp_groups()[best].spawn_tiles();
+    if (best >= 0) goal_mask |= a;
+    std::cout << a.positions()[0].x << "," << a.positions()[0].y;
     std::cout << std::endl;
 }
 
 void Bot::observe() {
     auto me = cambc::self();
     auto vis = me.visible_tiles();
-    int i = 0;
     for (int i = 0; i < get_static_camp_groups().size(); i++) {        
         if ((camp_spawns[i] & vis).is_empty()) {
             continue;
         }
         auto a = get_static_camp_groups()[i];
         if (a.state().index() == 0) camp_group_known_cooldowns[i] = 0;
+        else if (a.state().index() == 1) camp_group_known_cooldowns[i] = a.max_respawn_timer() + 10;
         else if (camp_group_known_cooldowns[i] <= 0) {
             camp_group_known_cooldowns[i] = a.max_respawn_timer();
             std::cout << "Set " << i << " to have cooldown " << a.max_respawn_timer() << std::endl;
-            std::cout << "pos x:  " << a.spawn_tiles().positions()[0].x << ", pos y: " << a.spawn_tiles().positions()[0].y << std::endl;
-            std::cout << "also pos x:  " << get_static_camp_groups()[i].spawn_tiles().positions()[0].x << ", pos y: " << get_static_camp_groups()[i].spawn_tiles().positions()[0].y << std::endl;
+            //std::cout << "pos x:  " << a.spawn_tiles().positions()[0].x << ", pos y: " << a.spawn_tiles().positions()[0].y << std::endl;
+            //std::cout << "also pos x:  " << get_static_camp_groups()[i].spawn_tiles().positions()[0].x << ", pos y: " << get_static_camp_groups()[i].spawn_tiles().positions()[0].y << std::endl;
         }
-        i++;
     }
 }
 
 void Bot::choose_state() {
     auto& me = cambc::self();
     auto vis = me.visible_tiles();
+    auto close = tiles_around(me.position(), 3);
+    auto blocked = blocked_tiles();
+    auto champ_tiles = cambc::vision::champion_tiles();
     double health_pct = me.health() / me.max_health();
     if (health_pct < 0.35) {
-        curr_state = State::FLEE;
+        if (!cambc::vision::champions(team::enemy).empty()) curr_state = State::FLEE;
+        if (curr_state == State::FARM) {
+            if (health_pct < 0.1) {
+                curr_state = State::FLEE;
+                return;
+            }
+            int total_health = 0;
+            int total_strength = 0;
+            for (auto c : cambc::vision::camps()) {
+                if (c.is_awake()) {
+                    total_health += c.health();
+                    total_strength += c.strength();
+                }
+            }
+            if ((int)(std::sqrt(total_health * total_strength / 10000)) > curr_power(me)) curr_state = State::FLEE;
+            if (total_health == 0) curr_state = State::CLAIM;
+        }
+        else if (curr_state == State::CLAIM) {
+            for (int i = 0; i < get_static_camp_groups().size(); i++) {
+                if ((camp_spawns[i] & vis).is_empty()) continue;
+                if (get_static_camp_groups()[i].state().index() == 1) {
+                    if ((camp_spawns[i] & champ_tiles).is_empty()) return;
+                }
+            }
+            curr_state = State::FLEE;
+        }
+        else curr_state = State::FLEE;
         return;
     }
     int multiplier = 2;
@@ -365,20 +466,13 @@ void Bot::choose_state() {
             if (health_pct >= 0.50) begin_finding();
             break;
         case State::FIND:
-            if (!(vis & goal_mask).is_empty()) curr_state = State::FARM;
-            if (goal_mask.is_empty()) {
-                int total_power = curr_power(me);
-                for (cambc::champion c : cambc::vision::champions(team::ally)) {
-                    total_power += curr_power(c);
-                }
-                set_difficulty_mask(total_power);
-                calculate_goal_mask();
+            if (!(close & goal_mask).is_empty()) curr_state = State::FARM;
+            if (!cambc::vision::awake_camp_tiles().is_empty()) curr_state = State::FARM;
+            if (me.gem_count() >= 10) {
+                curr_state = State::TRIB;
+                return;
             }
-            while (goal_mask.is_empty()) {
-                set_difficulty_mask(curr_power(me) * multiplier);
-                goal_mask = difficulty_mask;
-                multiplier *= 2;
-            }
+            if (goal_mask.is_empty()) curr_state = State::FLEE;
             break;
         case State::FARM:
             if (cambc::vision::awake_camp_tiles().is_empty()) {
@@ -393,6 +487,7 @@ void Bot::choose_state() {
                     curr_state = State::TRIB;
                     return;
                 }
+                if (!(cambc::vision::asleep_camp_tiles() & close).is_empty()) return;
                 begin_finding();
             }
             if (me.gem_count() > 0) {
@@ -418,6 +513,8 @@ void Bot::choose_state() {
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
                 if ((camp_spawns[i] & vis).is_empty()) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
+                    if (camp_spawns[i].is_set(me.position())) return;
+                    if (!(camp_spawns[i] & blocked).is_empty()) continue;
                     return;
                 }
             }
@@ -434,6 +531,7 @@ void Bot::choose_state() {
 void Bot::play_turn() {
     auto& me = cambc::self();
     auto vis = me.visible_tiles();
+    auto blocked = blocked_tiles();
 
     if (id < 0) {
         for (int i = 0; i < get_static_camp_groups().size(); i++) {
@@ -441,16 +539,20 @@ void Bot::play_turn() {
         }
         create_champ_type_id_dicts();
         initialize_id();
-        good_altars = uint_stream_to_vecs(read_from_draft(1));
+        auto _ = uint_stream_to_vecs(read_from_draft(1));
+        good_altars.insert(_.begin(), _.end());
         camp_group_difficulties = read_from_draft(2);
         for (int i = 0; i < camp_group_difficulties.size(); i++) {
-            std::cout << i << ": " << cambc::map::camp_groups()[i].camps().size() << ", ";
+            //std::cout << i << ": " << cambc::map::camp_groups()[i].camps().size() << ", ";
         }
-        std::cout << std::endl;
+        //std::cout << std::endl;
         camp_group_known_cooldowns.resize(cambc::map::camp_groups().size());
-        set_difficulty_mask(curr_power(me));
+        //set_difficulty_mask(stat_power(me));
+        for (auto a : good_altars) {
+            std::cout << a.x << ", " << a.y << "/";
+        }
     }
-    
+    if (!me.is_alive()) return;
     for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
         if (camp_group_known_cooldowns[i] > 0) --camp_group_known_cooldowns[i];
     }
@@ -460,7 +562,7 @@ void Bot::play_turn() {
     std::cout << "Used " << fuel << " fuel." << std::endl;
     
     // Hard skip
-    if (!me.is_alive() || (!me.can_move() && !me.can_attack()))
+    if (!me.can_move() && !me.can_attack())
         return;
     //Soft skip (should consider whether to cancel)
     if (me.is_recalling() || me.is_submitting_gems() || me.is_teleporting())
@@ -476,7 +578,8 @@ void Bot::play_turn() {
 
     std::uint32_t isTribbing = 0;
     cambc::shared_memory.read(0, std::span{&isTribbing, 1});
-    isTribbing &= ~(1 << id);
+    if (curr_state == State::TRIB) isTribbing |= 1 << id;
+    else isTribbing &= ~(1 << id);
     cambc::shared_memory.write(0, std::span{&isTribbing, 1});
 
     if (curr_state != State::FLEE) {
@@ -493,6 +596,26 @@ void Bot::play_turn() {
             barrage(enemies[target]);
         }
     }
+    for (auto a : me.abilities()) {
+        if (a.is_on_cooldown()) continue;
+        if (a.is_shield() || a.is_heal()) {
+            if (a.can_target_self()) a.use(me);
+            if (a.can_target_allies()) {
+                int lowest = 100000;
+                std::optional<cambc::champion> who = std::nullopt;
+                for (auto c : cambc::vision::champions(team::ally)) {
+                    if (c == me) continue;
+                    if (!a.valid_tiles().is_set(c.position())) continue;
+                    if (c.health() < lowest) {
+                        if (c.health() == c.max_health()) continue;
+                        lowest = c.health();
+                        who = c;
+                    }
+                }
+                if (who != std::nullopt) a.use(who.value());
+            }
+        }
+    }
     cambc::bitboard temp;
     temp.clear();
     switch(curr_state) {
@@ -506,27 +629,14 @@ void Bot::play_turn() {
             farm_camps();
             break;
         case State::TRIB: {
-            std::uint32_t isTribbing = 0;
-            cambc::shared_memory.read(0, std::span{&isTribbing, 1});
-            isTribbing |= 1 << id;
-            cambc::shared_memory.write(0, std::span{&isTribbing, 1});
-            cambc::bitboard goals;
-            goals.clear();
-            for (auto altar : good_altars) {
-                if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
-                    && !cambc::vision::has_altar_lock(altar)) {
-                        me.submit_gems(altar);
-                        return;
-                    }
-                if (!cambc::vision::has_altar_lock(altar)) goals |= tiles_around(altar, cambc::constants::submit_gems_range);
-            }
-            move_towards_closest(goals);
+            tribute();
             break;
         }
         case State::CLAIM:
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
                 if ((camp_spawns[i] & vis).is_empty()) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
+                    if (!(camp_spawns[i] & blocked).is_empty()) continue;
                     move_towards_closest(camp_spawns[i]);
                     break;
                 }
