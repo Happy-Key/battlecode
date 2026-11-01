@@ -1,4 +1,5 @@
 // Champion decisions. main.cpp dispatches here after the draft.
+#include <algorithm>
 #include <cambc.h>
 #include "bot.h"
 #include <array>
@@ -166,12 +167,22 @@ int curr_power(cambc::champion target) {
     return (int)(std::sqrt(target.health() * (target.strength() + target.focus() / 2) / 7000));
 }
 
+void Bot::buy_item(cambc::consumable_type type) {
+    cambc::self().buy(type);
+    spent_gold += type.cost();
+}
+
+void Bot::buy_item(cambc::item_type type, int count) {
+    cambc::self().buy(type, count);
+    spent_gold += type.cost() * count;
+}
+
 void Bot::buy_items() {
     auto& me = cambc::self();
 
     if (contested) {
         if (me.consumables()[cambc::consumable_type::altar_lock].count() == 0) {
-            if (me.gold_count() >= cambc::consumable_type::altar_lock.cost()) me.buy(cambc::consumable_type::altar_lock);
+            if (me.gold_count() >= cambc::consumable_type::altar_lock.cost()) buy_item(cambc::consumable_type::altar_lock);
         }
     }
     const std::array items{cambc::item_type::bruiser_shard_of_strength,
@@ -184,7 +195,7 @@ void Bot::buy_items() {
         rebuy = true;
     }
     if (count > 0 && me.can_buy(item, count)) {
-        me.buy(item, count);
+        buy_item(item, count);
         //if (!rebuy) set_difficulty_mask(stat_power(me));
     }
     if (rebuy) {
@@ -374,17 +385,20 @@ void Bot::create_champ_type_id_dicts() {
     std::cout << std::endl;
 }
 
+float gold_value() {
+    return 0.03 - cambc::round_number() / 100.0 / 1000.0;
+}
+
+float gem_value() {
+    int gem_diff = cambc::global_submitted_gems(team::ally) - cambc::global_submitted_gems(team::enemy);
+    int x = cambc::global_submitted_gems(team::enemy);
+    float urgency = (100 - std::min(gem_diff, 100)) * x / (2000.0 + x);
+    return 0.05 + cambc::round_number() / 10.0 / 1000.0 
+        + urgency / 1000.0;
+}
+
 void Bot::calculate_goal_mask() {
     std::cout << "cgm: disabled ";
-    /*
-    goal_mask = difficulty_mask;
-    for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
-        if (camp_group_known_cooldowns[i] > 0) {
-            goal_mask &= ~camp_spawns[i];
-            std::cout << i << ", ";
-        }
-    }
-    */
     std::vector<int> valid;
     int pow = stat_power(cambc::self());
     for (int mult = 1; mult <= 4; mult *= 2) {
@@ -414,17 +428,19 @@ void Bot::calculate_goal_mask() {
         vec2 camp_pos = get_static_camp_groups()[valid[i]].spawn_tiles().positions()[0];
         int gems = get_static_camp_groups()[valid[i]].gem_value();
         int gold = get_static_camp_groups()[valid[i]].gold_value();
-        float score = home.get(camp_pos) * 0.1 + me.get(camp_pos) - 0.2 * gems - 0.01 * gold;
+        float score = home.get(camp_pos) * 0.1 + me.get(camp_pos) - gem_value() * gems - gold_value() * gold;
         if (score < best_score) {
             best_score = score;
             best = valid[i];
         }
     }
     goal_mask.clear();
-    auto a = get_static_camp_groups()[best].spawn_tiles();
-    if (best >= 0) goal_mask |= a;
-    std::cout << a.positions()[0].x << "," << a.positions()[0].y;
-    std::cout << std::endl;
+    if (best >= 0) {
+        auto a = get_static_camp_groups()[best].spawn_tiles();
+        goal_mask |= a;
+        std::cout << a.positions()[0].x << "," << a.positions()[0].y;
+        std::cout << std::endl;
+    }
 }
 
 void Bot::observe() {
@@ -507,8 +523,8 @@ void Bot::choose_state() {
             if (health_pct >= 0.50) begin_finding();
             break;
         case State::FIND:
-            if (!(close & goal_mask).is_empty()) curr_state = State::FARM;
-            if (!cambc::vision::awake_camp_tiles().is_empty()) curr_state = State::FARM;
+            if (!(close & goal_mask & vis).is_empty()) curr_state = State::FARM;
+            if (!(cambc::vision::awake_camp_tiles() & close).is_empty()) curr_state = State::FARM;
             if (me.gem_count() >= 10) {
                 curr_state = State::TRIB;
                 return;
@@ -558,6 +574,10 @@ void Bot::choose_state() {
                     if (!(camp_spawns[i] & blocked).is_empty()) continue;
                     return;
                 }
+            }
+            if (me.gem_count() >= 10) {
+                curr_state = State::TRIB;
+                return;
             }
             begin_finding();
             break;
@@ -665,6 +685,7 @@ void Bot::play_turn() {
             flee();
             break;
         case State::FIND:
+            if (me.gold_count() >= 160 && me.gold_count() > spent_gold / 2) go_to_spawn(false);
             if (!move_towards_closest(goal_mask)) std::cout << "nooo" << std::endl;
             break;
         case State::FARM:
@@ -679,11 +700,10 @@ void Bot::play_turn() {
                 if ((camp_spawns[i] & vis).is_empty()) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
                     if (!(camp_spawns[i] & blocked).is_empty()) continue;
-                    move_towards_closest(camp_spawns[i]);
-                    break;
+                    temp |= camp_spawns[i];
                 }
             }
-            
+            move_towards_closest(temp);
             break;
         default:
             break;

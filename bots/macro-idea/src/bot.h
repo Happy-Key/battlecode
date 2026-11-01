@@ -12,6 +12,7 @@ class Bot {
     int rotation = 0;
     int id = -1;
     bool contested = false;
+    int spent_gold = 0;
     
     void buy_items();
 
@@ -43,4 +44,6 @@ public:
     void begin_finding();
     void observe();
     void tribute();
+    void buy_item(cambc::consumable_type);
+    void buy_item(cambc::item_type, int count);
 };
