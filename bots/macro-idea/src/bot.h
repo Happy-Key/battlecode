@@ -11,6 +11,7 @@ class Bot {
     int curr_state = State::FARM;
     int rotation = 0;
     int id = -1;
+    bool contested = false;
     
     void buy_items();
 

@@ -146,13 +146,19 @@ void insert_vector(std::vector<std::uint8_t>& memory, std::vector<std::uint8_t> 
     ++offset;
 }
 
+void insert_item(std::vector<std::uint8_t>& memory, std::uint8_t in,
+    std::size_t& offset) {
+    memory.insert(memory.begin() + offset, in);
+    offset++;
+}
+
 void play_draft() {
     if (cambc::round_number() == 0) {
         std::vector<std::uint8_t> id_buffer = pick_champions();
         std::vector<cambc::vec2> ours, contested, relevant_altars;
         ours.clear();
         contested.clear();
-        bool noEZAltars = get_relevant_altars(ours, contested, 3);
+        bool noEZAltars = get_relevant_altars(ours, contested, 4);
         if (noEZAltars) {
             relevant_altars = contested;
             std::cout << "contested" << std::endl;
@@ -183,13 +189,18 @@ void play_draft() {
             camp_buffer.push_back(std::sqrt(total_health * total_strength / 10000));
             std::cout << i << ": " << std::sqrt(total_health * total_strength / 10000) << ", ";
         }
+
+        std::int8_t flag = 0;
+        flag <<= 1;
+        flag |= noEZAltars;
         //std::cout << std::endl;
         std::vector<std::uint8_t> memory_buffer;
         std::size_t offset = 0;
         insert_vector(memory_buffer, id_buffer, offset);
         insert_vector(memory_buffer, altar_buffer, offset);
         insert_vector(memory_buffer, camp_buffer, offset);
-        memory_buffer.insert(memory_buffer.begin(), (uint8_t)3);
+        insert_item(memory_buffer, flag, offset);
+        memory_buffer.insert(memory_buffer.begin(), (uint8_t)offset);
         for (int i = 0; i < 20; i++) {
             std::cout << (int)*(memory_buffer.begin() + i) << " ";
         }

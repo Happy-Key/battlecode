@@ -168,6 +168,12 @@ int curr_power(cambc::champion target) {
 
 void Bot::buy_items() {
     auto& me = cambc::self();
+
+    if (contested) {
+        if (me.consumables()[cambc::consumable_type::altar_lock].count() == 0) {
+            if (me.gold_count() >= cambc::consumable_type::altar_lock.cost()) me.buy(cambc::consumable_type::altar_lock);
+        }
+    }
     const std::array items{cambc::item_type::bruiser_shard_of_strength,
         cambc::item_type::bruiser_shard_of_health, cambc::item_type::bruiser_shard_of_focus};
     const auto item = items[chosen_stat];
@@ -278,16 +284,33 @@ void Bot::tribute() {
     cambc::distance_field home;
     cambc::bitboard visited;
     home.compute(blocked_tiles(), cambc::map::spawn_region(team::ally), visited);
-    
     for (auto altar : cambc::map::altars().positions()) {
-        if (distance(me.position(), altar) <= cambc::constants::submit_gems_range
-            && !cambc::vision::has_altar_lock(altar)) {
-                me.submit_gems(altar);
-                return;
+        if (distance(me.position(), altar) <= cambc::constants::submit_gems_range) {
+            if (!cambc::vision::altar_lock_tiles(team::ally).is_set(altar) 
+                && me.consumables()[cambc::consumable_type::altar_lock].count() > 0) me.consumables()[cambc::consumable_type::altar_lock].use(altar);
+            me.submit_gems(altar);
+            return;
+        }
+        
+        if (good_altars.contains(altar) || home.get(altar) < home.get(me.position())) {
+            if (me.consumables()[cambc::consumable_type::altar_lock].count() > 0) {
+                auto iter = good_altars.find(altar);
+                if (iter != good_altars.end()) {
+                    int index = std::distance(good_altars.begin(), iter);
+                    int offset = index + id_to_type.size();
+                    std::int16_t mem = cambc::shared_memory[0];
+                    //cambc::shared_memory.read(0, std::span{&mem, 1});
+                    if ((mem & (1 << offset)) != 0) continue;
+                }
             }
-        if (!cambc::vision::has_altar_lock(altar)) {
-            if (good_altars.contains(altar) || home.get(altar) < home.get(me.position()))
+            goals |= tiles_around(altar, cambc::constants::submit_gems_range);
+        }
+    }
+    if (goals.is_empty()) {
+        for (auto altar : cambc::map::altars().positions()) {
+            if (good_altars.contains(altar) || home.get(altar) < home.get(me.position())) {
                 goals |= tiles_around(altar, cambc::constants::submit_gems_range);
+            }
         }
     }
     move_towards_closest(goals);
@@ -421,6 +444,24 @@ void Bot::observe() {
             //std::cout << "also pos x:  " << get_static_camp_groups()[i].spawn_tiles().positions()[0].x << ", pos y: " << get_static_camp_groups()[i].spawn_tiles().positions()[0].y << std::endl;
         }
     }
+    if (contested) {
+        for (auto altar : cambc::map::altars().positions()) {
+            if (!vis.is_set(altar)) continue;
+            auto iter = good_altars.find(altar);
+            if (iter == good_altars.end()) continue;
+            int index = std::distance(good_altars.begin(), iter);
+            int offset = index + id_to_type.size();
+            std::int16_t mem;
+            cambc::shared_memory.read(0, std::span{&mem, 1});
+            if (cambc::vision::altar_lock_tiles(team::ally).is_set(altar)) {
+                mem |= 1 << offset;
+            }
+            else {
+                mem &= ~(1 << offset);
+            }
+            cambc::shared_memory.write(0, std::span{&mem, 1});
+        }
+    }
 }
 
 void Bot::choose_state() {
@@ -551,6 +592,7 @@ void Bot::play_turn() {
         for (auto a : good_altars) {
             std::cout << a.x << ", " << a.y << "/";
         }
+        contested = ((std::uint8_t)cambc::draft_memory[4] & 1) == 1;
     }
     if (!me.is_alive()) return;
     for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
