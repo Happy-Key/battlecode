@@ -126,6 +126,14 @@ bool move_towards_closest(cambc::bitboard goals) {
     return step != me.position() && me.move_absolute(step);
 }
 
+bool move_randomly() {
+    auto me = cambc::self();
+    const auto blocked = blocked_tiles();
+    auto a = blocked.reachable_tiles(me.position(), me.base_stats().base_move_speed).positions();
+    std::cout << "im crazy" << std::endl;
+    return me.move_absolute(a[random_number(a.size()) + cambc::round_number() % a.size()]);
+}
+
 cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitboard pixels) {
     cambc::distance_field field;
     cambc::bitboard visited;
@@ -282,7 +290,7 @@ void Bot::farm_camps() {
             goals &= ~spawns;
 
     // Fresh vision after movement may reveal a camp already in range.
-    if (move_towards_closest(goals))
+    if (!move_towards_closest(goals & cambc::vision::camp_tiles())) if (move_towards_closest(goals))
         attack_first_in_range(cambc::vision::camps());
 
     if (cambc::self().can_move()) move_towards_closest(cambc::vision::awake_camp_tiles());
@@ -563,7 +571,7 @@ void Bot::choose_state() {
             }
             break;
         case State::CLAIM:
-            if (!cambc::vision::awake_camp_tiles().is_empty()) {
+            if (!(cambc::vision::awake_camp_tiles() & close).is_empty()) {
                 curr_state = State::FARM;
             }
             
@@ -686,7 +694,7 @@ void Bot::play_turn() {
             break;
         case State::FIND:
             if (me.gold_count() >= 160 && me.gold_count() > spent_gold / 2) go_to_spawn(false);
-            if (!move_towards_closest(goal_mask)) std::cout << "nooo" << std::endl;
+            if (!move_towards_closest(goal_mask)) if (!move_randomly()) std::cout << "nooo" << std::endl;
             break;
         case State::FARM:
             farm_camps();
