@@ -693,6 +693,7 @@ void Bot::play_turn() {
             break;
         case State::TRIB: {
             tribute();
+            if (me.can_move()) farm_camps();
             break;
         }
         case State::CLAIM:
