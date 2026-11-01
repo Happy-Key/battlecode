@@ -4,6 +4,7 @@ matches/
 replays/
 bots/*/build/
 bots/*/target/
+bots/prev-iter
 *.cache/
 *.DS_Store
 .vscode

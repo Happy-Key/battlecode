@@ -23,6 +23,7 @@ public:
         TRIB,
         FIND,
         CLAIM,
+        FIGHT,
     };
     static constexpr cambc::vec2 directions[] = {{0,1}, {1,1}, {1,0}, {1,-1}, {0,-1}, {-1,-1}, {-1,0}, {-1,1}};
     std::unordered_map<std::uint8_t, cambc::champion_type> id_to_type;

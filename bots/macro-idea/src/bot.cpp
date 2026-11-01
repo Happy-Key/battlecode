@@ -335,6 +335,45 @@ void Bot::tribute() {
     move_towards_closest(goals);
 }
 
+void fight() {
+    auto me = cambc::self();
+    auto allies = cambc::vision::champions(team::ally);
+    auto enemies = cambc::vision::champions(team::enemy);
+    if (enemies.empty()) return;
+    int lowest = enemies[0].health();
+    int target = 0;
+    for (int i = 1; i < enemies.size(); i++) {
+        if (enemies[i].health() < lowest) {
+            lowest = enemies[i].health();
+            target = i;
+        }
+    }
+    int enemy_power = 0;
+    int ally_power = 0;
+    for (auto e : enemies) {
+        enemy_power += curr_power(e);
+    }
+    for (auto a : allies) {
+        ally_power += curr_power(a);
+    }
+    barrage(enemies[target]);
+    if (ally_power > enemy_power) {
+        if (me.can_move()) {
+            me.move_towards(enemies[target].position());
+        }
+        for (auto a : me.abilities()) {
+            if (a.is_on_cooldown()) continue;
+            if (a.is_dash()) {
+                cambc::bitboard target_board;
+                target_board.set(enemies[target].position());
+                auto bb = get_closest_pixel_to_bitboard(target_board, blocked_tiles().reachable_tiles(me.position(), 2));
+                a.use();
+            }
+        }
+        barrage(enemies[target]);
+    }
+}
+
 void Bot::begin_finding() {
     calculate_goal_mask();
     curr_state = State::FIND;
@@ -494,7 +533,17 @@ void Bot::choose_state() {
     auto close = tiles_around(me.position(), 3);
     auto blocked = blocked_tiles();
     auto champ_tiles = cambc::vision::champion_tiles();
+    auto enemy_tiles = cambc::vision::champion_tiles(team::enemy);
     double health_pct = me.health() / me.max_health();
+    int enemy_power = 0;
+    for (auto e : cambc::vision::champions(team::enemy)) {
+        enemy_power += curr_power(e);
+    }
+    int ally_power = 0;
+    for (auto a : cambc::vision::champions(team::ally)) {
+        ally_power += curr_power(a);
+    }
+
     if (health_pct < 0.35) {
         if (!cambc::vision::champions(team::enemy).empty()) curr_state = State::FLEE;
         if (curr_state == State::FARM) {
@@ -513,6 +562,13 @@ void Bot::choose_state() {
             if ((int)(std::sqrt(total_health * total_strength / 10000)) > curr_power(me)) curr_state = State::FLEE;
             if (total_health == 0) curr_state = State::CLAIM;
         }
+        else if (curr_state == State::FIGHT) {
+            if (health_pct < 0.1) {
+                curr_state = State::FLEE;
+                return;
+            }
+            if (enemy_power > ally_power) curr_state = State::FLEE;
+        }
         else if (curr_state == State::CLAIM) {
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
                 if ((camp_spawns[i] & vis).is_empty()) continue;
@@ -525,7 +581,7 @@ void Bot::choose_state() {
         else curr_state = State::FLEE;
         return;
     }
-    int multiplier = 2;
+    if (!(enemy_tiles & close).is_empty()) curr_state = State::FIGHT;
     switch(curr_state) {
         case State::FLEE:
             if (health_pct >= 0.50) begin_finding();
@@ -588,6 +644,13 @@ void Bot::choose_state() {
                 return;
             }
             begin_finding();
+            break;
+        case State::FIGHT:
+            if (enemy_tiles.is_empty()) {
+                curr_state = State::FIND;
+                return;
+            }
+            if (enemy_power > ally_power * 1.3) curr_state = State::FLEE;
             break;
         default:
             if (health_pct < 0.35) {
@@ -713,6 +776,9 @@ void Bot::play_turn() {
                 }
             }
             move_towards_closest(temp);
+            break;
+        case State::FIGHT:
+            fight();
             break;
         default:
             break;
