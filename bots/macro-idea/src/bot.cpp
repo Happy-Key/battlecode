@@ -149,9 +149,7 @@ cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitb
 
     for (const cambc::vec2& p : pixels.positions()) {
         if (visited.is_set(p)) {
-            // Linear index for row-major order: y * width + x
-            std::size_t index = static_cast<std::size_t>(p.y) * map_width + p.x;
-            std::uint16_t dist = dist_ptr[index];
+            std::uint16_t dist = field.get(p);
             
             if (dist < min_distance) {
                 min_distance = dist;
@@ -307,7 +305,7 @@ void Bot::tribute() {
     goals.clear();
     cambc::distance_field home;
     cambc::bitboard visited;
-    home.compute(blocked_tiles(), cambc::map::spawn_region(team::ally), visited);
+    home.compute(blocked_tiles() & ~cambc::map::altars(), cambc::map::spawn_region(team::ally), visited);
     for (auto altar : cambc::map::altars().positions()) {
         if (distance(me.position(), altar) <= cambc::constants::submit_gems_range) {
             if (!cambc::vision::altar_lock_tiles(team::ally).is_set(altar) 
@@ -551,6 +549,14 @@ void Bot::choose_state() {
     for (auto a : cambc::vision::champions(team::ally)) {
         ally_power += curr_power(a);
     }
+
+    if (me.ward_cooldown() <= 0) {
+        if (!(cambc::map::bushes() & me.ward_placement_tiles()).is_empty() && (cambc::map::bushes()& me.ward_placement_tiles() & vis).is_empty()) {
+            if ((enemy_tiles & me.visible_tiles_from(me.position())) == enemy_tiles)
+                me.place_ward((cambc::map::bushes() & me.ward_placement_tiles()).positions()[0]);
+        }
+    }
+    
 
     if (health_pct < 0.35) {
         if (!cambc::vision::champions(team::enemy).empty()) curr_state = State::FLEE;
