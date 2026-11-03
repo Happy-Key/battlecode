@@ -193,13 +193,18 @@ void Bot::buy_items() {
             if (me.gold_count() >= cambc::consumable_type::altar_lock.cost()) buy_item(cambc::consumable_type::altar_lock);
         }
     }
-    const std::array items{cambc::item_type::bruiser_shard_of_strength,
-        cambc::item_type::bruiser_shard_of_health, cambc::item_type::bruiser_shard_of_focus};
-    const auto item = items[chosen_stat];
+    cambc::item_type item;
+    if (build_order_index >= std::size(build_order)){
+        item = endgame_build[random_number(std::size(endgame_build))];
+    }
+    else {
+        item = build_order[build_order_index];
+    }
+
     int count = me.gold_count() / item.cost();
     bool rebuy = false;
-    if (count + me.item_count()[items[chosen_stat]] > 5) {
-        count = 5 - me.item_count()[items[chosen_stat]];
+    if (count + me.item_count()[item] >= 5) {
+        count = 5 - me.item_count()[item];
         rebuy = true;
     }
     if (count > 0 && me.can_buy(item, count)) {
@@ -208,6 +213,7 @@ void Bot::buy_items() {
     }
     if (rebuy) {
         chosen_stat = random_number(3);
+        build_order_index++;
         if (count > 0) buy_items();
     }
 }

@@ -13,6 +13,11 @@ class Bot {
     int id = -1;
     bool contested = false;
     int spent_gold = 0;
+    int build_order_index = 0;
+    cambc::item_type build_order[6] = {cambc::item_type::jungle_shard_of_strength, 
+        cambc::item_type::treasure_shard_of_health, cambc::item_type::monster_shard_of_strength, cambc::item_type::durability_shard_of_health,
+        cambc::item_type::collectors_shard_of_strength, cambc::item_type::skirmish_shard_of_health};
+    cambc::item_type endgame_build[2] = {cambc::item_type::enum_type::bruiser_shard_of_health, cambc::item_type::enum_type::bruiser_shard_of_strength};
     
     void buy_items();
 
