@@ -147,7 +147,6 @@ cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitb
     std::optional<cambc::vec2> closest_b_pixel = std::nullopt;
     std::uint16_t min_distance = 0xFFFF;
 
-    // 3. Loop through b's positions using direct array lookup instead of field.get(p)
     for (const cambc::vec2& p : pixels.positions()) {
         if (visited.is_set(p)) {
             // Linear index for row-major order: y * width + x
@@ -743,6 +742,31 @@ void Bot::play_turn() {
                 }
             }
             barrage(enemies[target]);
+        }
+    }
+    else {
+        auto enemies = cambc::vision::champions(team::enemy);
+        if (!enemies.empty()) {
+            cambc::champion target = enemies[0];
+            for (cambc::champion e : enemies) {
+                if (me.position().chebyshev_distance(e.position()) < me.position().chebyshev_distance(target.position())) target = e;
+            }
+            std::cout << "test" << std::endl;
+            for (cambc::ability a : me.abilities()) {
+                if (a.is_on_cooldown()) continue;
+                if (a.is_cc()) {
+                    if (!a.valid_tiles().is_set(target.position())) continue;
+                    a.use(target);
+                }
+                if (me.attack_range() > 1) continue;
+                if (a.is_attack_reset()) {
+                    if (distance(me.position(), target.position()) <= 1) {
+                        me.attack(target);
+                        a.use(me);
+                    }
+                }
+            }
+            if (me.attack_range() <= 1 && distance(me.position(), target.position()) <= 1) me.attack(target);
         }
     }
     for (auto a : me.abilities()) {
