@@ -106,7 +106,7 @@ bool move_towards_closest(cambc::bitboard goals) {
 
     // Only free goals or occupied camp tiles can seed the field.
     const auto blocked = blocked_tiles();
-    goals &= ~blocked | cambc::vision::camp_tiles();
+    //goals &= ~blocked | cambc::vision::camp_tiles();
     if (goals.is_empty())
         return false;
     if (goals.count() == 1 && !blocked.is_set(goals.positions()[0]))
@@ -221,7 +221,7 @@ template<class Target>
 void barrage(const Target& target) {
     auto& me = cambc::self();
     cambc::bitboard attack_tiles = me.attack_tiles();
-    if (is_valid_target_in_range(target, attack_tiles)) me.attack(target);
+    if (me.can_attack() && is_valid_target_in_range(target, attack_tiles)) me.attack(target);
     for (auto a : me.abilities()) {
         if (a.is_on_cooldown()) continue;
         if (a.is_damage() || a.is_cc() || a.is_aoe_damage()) {
@@ -311,7 +311,7 @@ void Bot::tribute() {
             return;
         }
         
-        if (good_altars.contains(altar) || home.get(altar) < home.get(me.position())) {
+        if (good_altars.contains(altar) || home.get(altar) < home.get(me.position()) + 5) {
             if (me.consumables()[cambc::consumable_type::altar_lock].count() > 0) {
                 auto iter = good_altars.find(altar);
                 if (iter != good_altars.end()) {
@@ -350,27 +350,29 @@ void fight() {
     }
     int enemy_power = 0;
     int ally_power = 0;
+    barrage(enemies[target]);
     for (auto e : enemies) {
+        barrage(e);
         enemy_power += curr_power(e);
     }
     for (auto a : allies) {
         ally_power += curr_power(a);
     }
-    barrage(enemies[target]);
     if (ally_power > enemy_power) {
         if (me.can_move()) {
-            me.move_towards(enemies[target].position());
+            move_towards_closest(cambc::vision::champion_tiles(team::enemy));
         }
         for (auto a : me.abilities()) {
             if (a.is_on_cooldown()) continue;
             if (a.is_dash()) {
-                cambc::bitboard target_board;
-                target_board.set(enemies[target].position());
-                auto bb = get_closest_pixel_to_bitboard(target_board, blocked_tiles().reachable_tiles(me.position(), 2));
-                a.use();
+                auto bb = get_closest_pixel_to_bitboard(cambc::vision::champion_tiles(team::enemy), blocked_tiles().reachable_tiles(me.position(), 2));
+                a.use(bb.positions()[0]);
             }
         }
         barrage(enemies[target]);
+        for (auto e : enemies) {
+            barrage(e);
+        }
     }
 }
 
@@ -531,6 +533,7 @@ void Bot::choose_state() {
     auto& me = cambc::self();
     auto vis = me.visible_tiles();
     auto close = tiles_around(me.position(), 3);
+    auto kinda_close = tiles_around(me.position(), 5);
     auto blocked = blocked_tiles();
     auto champ_tiles = cambc::vision::champion_tiles();
     auto enemy_tiles = cambc::vision::champion_tiles(team::enemy);
@@ -581,7 +584,7 @@ void Bot::choose_state() {
         else curr_state = State::FLEE;
         return;
     }
-    if (!(enemy_tiles & close).is_empty()) curr_state = State::FIGHT;
+    if (!(enemy_tiles & kinda_close).is_empty()) curr_state = State::FIGHT;
     switch(curr_state) {
         case State::FLEE:
             if (health_pct >= 0.50) begin_finding();
@@ -589,6 +592,13 @@ void Bot::choose_state() {
         case State::FIND:
             if (!(close & goal_mask & vis).is_empty()) curr_state = State::FARM;
             if (!(cambc::vision::awake_camp_tiles() & close).is_empty()) curr_state = State::FARM;
+            for (auto a : get_static_camp_groups()) {
+                if ((a.spawn_tiles() & vis).is_empty()) continue;
+                if (a.state().index() == 1 && (a.spawn_tiles() & champ_tiles).is_empty()) {
+                    curr_state = State::CLAIM;
+                    return;
+                }
+            }
             if (me.gem_count() >= 10) {
                 curr_state = State::TRIB;
                 return;
