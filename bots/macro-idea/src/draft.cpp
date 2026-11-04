@@ -150,6 +150,27 @@ std::vector<std::uint8_t> pick_champions() {
     return result;
 }
 
+uint8_t prospector() {
+    int gem_value = 0;
+    int gold_value = 0;
+    int gem_clusters = 0;
+    int gold_clusters = 0;
+    int total_camps = 0;
+    for (auto cg : cambc::map::camp_groups()) {
+        gem_value += cg.gem_value();
+        gold_value += cg.gold_value();
+        for (auto c : cg.camps()) {
+            if (c.is_gem_cluster()) gem_clusters++;
+            if (c.is_gold_cluster()) gold_clusters++;
+            total_camps++;
+        }
+    }
+    if (gem_clusters + gold_clusters > total_camps / 2 || gold_clusters * 20 > gold_value / 2) return 3;
+    if (gold_clusters * 20 > gold_value * 4 / 10 || gem_clusters * 7 > gem_value * 7 / 10) return 2;
+    if (gold_clusters * 20 > gold_value * 3 / 10 || gem_clusters * 7 > gem_value * 3 / 10) return 1;
+    return 0;
+}
+
 void insert_vector(std::vector<std::uint8_t>& memory, std::vector<std::uint8_t> in,
     std::size_t& offset) {
     memory.insert(memory.begin() + offset, in.size());
@@ -203,7 +224,7 @@ void play_draft() {
         }
 
         std::int8_t flag = 0;
-        flag <<= 1;
+        flag |= prospector() << 1;
         flag |= noEZAltars;
         //std::cout << std::endl;
         std::vector<std::uint8_t> memory_buffer;

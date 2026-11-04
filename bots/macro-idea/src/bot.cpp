@@ -210,7 +210,9 @@ void Bot::buy_items() {
         item = endgame_build[random_number(std::size(endgame_build))];
     }
     else {
+        std::cout << (int)build_order[build_order_index];
         item = build_order[build_order_index];
+        std::cout << "bought" << std::endl;
     }
 
     int count = me.gold_count() / item.cost();
@@ -454,7 +456,7 @@ void Bot::create_champ_type_id_dicts() {
 }
 
 float gold_value() {
-    return 0.03 - cambc::round_number() / 100.0 / 1000.0;
+    return 0.04 - cambc::round_number() / 50.0 / 1000.0;
 }
 
 float gem_value() {
@@ -738,7 +740,11 @@ void Bot::play_turn() {
                 dasher = i;
             }
         }
-
+        uint8_t prospector = (std::uint8_t)cambc::draft_memory[4] & (3 << 1) >> 1;
+        if (prospector != 0) {
+            int flag_to_order[] = {0,2,1,0};
+            build_order.insert(build_order.begin() + flag_to_order[prospector], cambc::item_type::prospector_shard_of_strength);
+        }
         contested = ((std::uint8_t)cambc::draft_memory[4] & 1) != 0;
     }
     if (!me.is_alive()) return;
@@ -857,7 +863,10 @@ void Bot::play_turn() {
             break;
         case State::FIND:
             if (me.gold_count() >= 160 && me.gold_count() > spent_gold / 2) go_to_spawn(false);
-            if (!move_towards_closest(goal_mask)) if (!move_randomly()) std::cout << "nooo" << std::endl;
+            if (!move_towards_closest(goal_mask)) {
+                if (!move_randomly()) std::cout << "nooo" << std::endl;
+                calculate_goal_mask();
+            }
             break;
         case State::FARM:
             farm_camps();
