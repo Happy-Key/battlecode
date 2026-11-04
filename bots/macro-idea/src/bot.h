@@ -14,10 +14,10 @@ class Bot {
     bool contested = false;
     int spent_gold = 0;
     int build_order_index = 0;
-    cambc::item_type build_order[6] = {cambc::item_type::jungle_shard_of_strength, 
+    std::vector<cambc::item_type> build_order = {cambc::item_type::jungle_shard_of_strength, 
         cambc::item_type::treasure_shard_of_health, cambc::item_type::monster_shard_of_strength, cambc::item_type::durability_shard_of_health,
         cambc::item_type::collectors_shard_of_strength, cambc::item_type::skirmish_shard_of_health};
-    cambc::item_type endgame_build[2] = {cambc::item_type::enum_type::bruiser_shard_of_health, cambc::item_type::enum_type::bruiser_shard_of_strength};
+    std::vector<cambc::item_type> endgame_build = {cambc::item_type::bruiser_shard_of_health, cambc::item_type::bruiser_shard_of_strength};
     
     void buy_items();
 
@@ -37,6 +37,7 @@ public:
     std::vector<uint8_t> camp_group_known_cooldowns;
     std::vector<uint8_t> camp_group_difficulties;
     std::vector<cambc::bitboard> camp_spawns;
+    std::vector<bool> camp_group_in_view;
     cambc::bitboard difficulty_mask;
     cambc::bitboard goal_mask;
     

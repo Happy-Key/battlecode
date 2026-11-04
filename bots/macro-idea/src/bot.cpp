@@ -398,7 +398,7 @@ void go_to_spawn(bool attacked) {
 void flee() {
     auto me = cambc::self();
     auto threats = cambc::vision::champion_tiles(team::enemy) | cambc::vision::awake_camp_tiles();
-    if (threats.is_empty()) {
+    if ((threats & tiles_around(me.position(), 8)).is_empty()) {
         go_to_spawn(false);
         return;
     }
@@ -477,7 +477,7 @@ void Bot::calculate_goal_mask() {
     int best = -1;
     float best_score = 10000;
     for (int i = 0; i < valid.size(); i++) {
-        vec2 camp_pos = get_static_camp_groups()[valid[i]].spawn_tiles().positions()[0];
+        vec2 camp_pos = camp_spawns[valid[i]].positions()[0];
         int gems = get_static_camp_groups()[valid[i]].gem_value();
         int gold = get_static_camp_groups()[valid[i]].gold_value();
         float score = home.get(camp_pos) * 0.1 + me.get(camp_pos) - gem_value() * gems - gold_value() * gold;
@@ -498,10 +498,13 @@ void Bot::calculate_goal_mask() {
 void Bot::observe() {
     auto me = cambc::self();
     auto vis = me.visible_tiles();
-    for (int i = 0; i < get_static_camp_groups().size(); i++) {        
+    std::fill(camp_group_in_view.begin(), camp_group_in_view.end(), false);
+    for (int i = 0; i < get_static_camp_groups().size(); i++) {
+        //if (cambc::fuel_remaining() < 80000) break;
         if ((camp_spawns[i] & vis).is_empty()) {
             continue;
         }
+        camp_group_in_view[i] = true;
         auto a = get_static_camp_groups()[i];
         if (a.state().index() == 0) camp_group_known_cooldowns[i] = 0;
         else if (a.state().index() == 1) camp_group_known_cooldowns[i] = a.max_respawn_timer() + 10;
@@ -585,7 +588,7 @@ void Bot::choose_state() {
         }
         else if (curr_state == State::CLAIM) {
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
-                if ((camp_spawns[i] & vis).is_empty()) continue;
+                if (!camp_group_in_view[i]) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
                     if ((camp_spawns[i] & champ_tiles).is_empty()) return;
                 }
@@ -603,9 +606,10 @@ void Bot::choose_state() {
         case State::FIND:
             if (!(close & goal_mask & vis).is_empty()) curr_state = State::FARM;
             if (!(cambc::vision::awake_camp_tiles() & close).is_empty()) curr_state = State::FARM;
-            for (auto a : get_static_camp_groups()) {
-                if ((a.spawn_tiles() & vis).is_empty()) continue;
-                if (a.state().index() == 1 && (a.spawn_tiles() & champ_tiles).is_empty()) {
+            for (int i = 0; i < get_static_camp_groups().size(); i++) {
+                auto a = get_static_camp_groups()[i];
+                if (!camp_group_in_view[i]) continue;
+                if (a.state().index() == 1 && (camp_spawns[i] & champ_tiles).is_empty()) {
                     curr_state = State::CLAIM;
                     return;
                 }
@@ -618,8 +622,9 @@ void Bot::choose_state() {
             break;
         case State::FARM:
             if (cambc::vision::awake_camp_tiles().is_empty()) {
-                for (auto a : get_static_camp_groups()) {
-                    if ((a.spawn_tiles() & vis).is_empty()) continue;
+                for (int i = 0; i < get_static_camp_groups().size(); i++) {
+                    auto a = get_static_camp_groups()[i];
+                    if (!camp_group_in_view[i]) continue;
                     if (a.state().index() == 1) {
                         curr_state = State::CLAIM;
                         return;
@@ -653,7 +658,7 @@ void Bot::choose_state() {
             }
             
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
-                if ((camp_spawns[i] & vis).is_empty()) continue;
+                if (!camp_group_in_view[i]) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
                     if (camp_spawns[i].is_set(me.position())) return;
                     if (!(camp_spawns[i] & blocked).is_empty()) continue;
@@ -695,7 +700,8 @@ void Bot::play_turn() {
         auto _ = uint_stream_to_vecs(read_from_draft(1));
         good_altars.insert(_.begin(), _.end());
         camp_group_difficulties = read_from_draft(2);
-        for (int i = 0; i < camp_group_difficulties.size(); i++) {
+        camp_group_in_view.resize(camp_group_difficulties.size());
+        for (int i = 0; i < get_static_camp_groups().size(); i++) {
             //std::cout << i << ": " << cambc::map::camp_groups()[i].camps().size() << ", ";
         }
         //std::cout << std::endl;
@@ -704,7 +710,8 @@ void Bot::play_turn() {
         for (auto a : good_altars) {
             std::cout << a.x << ", " << a.y << "/";
         }
-        contested = ((std::uint8_t)cambc::draft_memory[4] & 1) == 1;
+
+        contested = ((std::uint8_t)cambc::draft_memory[4] & 1) != 0;
     }
     if (!me.is_alive()) return;
     for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
@@ -815,7 +822,7 @@ void Bot::play_turn() {
         }
         case State::CLAIM:
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
-                if ((camp_spawns[i] & vis).is_empty()) continue;
+                if (!camp_group_in_view[i]) continue;
                 if (get_static_camp_groups()[i].state().index() == 1) {
                     if (!(camp_spawns[i] & blocked).is_empty()) continue;
                     temp |= camp_spawns[i];
