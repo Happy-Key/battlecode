@@ -164,12 +164,12 @@ cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitb
 }
 
 int stat_power(cambc::champion target) {
-    std::cout << "my power: " << std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 7000) << std::endl;
-    return (int)(std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 7000));
+    std::cout << "my power: " << std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 6000) << std::endl;
+    return (int)(std::sqrt(target.max_health() * (target.strength() + target.focus() / 2) / 6000));
 }
 
 int curr_power(cambc::champion target) {
-    return (int)(std::sqrt(target.health() * (target.strength() + target.focus() / 2) / 7000));
+    return (int)(std::sqrt(target.health() * (target.strength() + target.focus() / 2) / 6000));
 }
 
 void Bot::buy_item(cambc::consumable_type type) {
@@ -507,9 +507,13 @@ void Bot::observe() {
         camp_group_in_view[i] = true;
         auto a = get_static_camp_groups()[i];
         if (a.state().index() == 0) camp_group_known_cooldowns[i] = 0;
-        else if (a.state().index() == 1) camp_group_known_cooldowns[i] = a.max_respawn_timer() + 10;
+        else if (a.state().index() == 1) {
+            camp_group_known_cooldowns[i] = a.max_respawn_timer() + 10;
+            message_queue.push(i+1);
+        }
         else if (camp_group_known_cooldowns[i] <= 0) {
             camp_group_known_cooldowns[i] = a.max_respawn_timer();
+            message_queue.push(i+1);
             std::cout << "Set " << i << " to have cooldown " << a.max_respawn_timer() << std::endl;
             //std::cout << "pos x:  " << a.spawn_tiles().positions()[0].x << ", pos y: " << a.spawn_tiles().positions()[0].y << std::endl;
             //std::cout << "also pos x:  " << get_static_camp_groups()[i].spawn_tiles().positions()[0].x << ", pos y: " << get_static_camp_groups()[i].spawn_tiles().positions()[0].y << std::endl;
@@ -570,14 +574,17 @@ void Bot::choose_state() {
             }
             int total_health = 0;
             int total_strength = 0;
+            bool none_awake = true;
             for (auto c : cambc::vision::camps()) {
                 if (c.is_awake()) {
                     total_health += c.health();
                     total_strength += c.strength();
+                    none_awake = false;
                 }
             }
             if ((int)(std::sqrt(total_health * total_strength / 10000)) > curr_power(me)) curr_state = State::FLEE;
             if (total_health == 0) curr_state = State::CLAIM;
+            if (none_awake)curr_state = State::FLEE;
         }
         else if (curr_state == State::FIGHT) {
             if (health_pct < 0.1) {
@@ -718,7 +725,25 @@ void Bot::play_turn() {
         if (camp_group_known_cooldowns[i] > 0) --camp_group_known_cooldowns[i];
     }
     long fuel = cambc::fuel_remaining();
+    std::uint8_t camp_message = 0;
+    cambc::shared_memory.read(7, std::span{&camp_message, 1});
+    if (camp_message != 0) {
+        if (camp_group_known_cooldowns[camp_message-1] <= 0)
+            {camp_group_known_cooldowns[camp_message-1] = get_static_camp_groups()[camp_message-1].max_respawn_timer(); 
+                std::cout<<"received "<<camp_message-1<<std::endl;}
+    }
     observe();
+    if (!message_queue.empty()) {
+        if (camp_message == message_queue.front()) {
+            message_queue.pop();
+            std::uint8_t fred = 0;
+            if (message_queue.empty()) cambc::shared_memory.write(7, std::span{&fred, 1});
+            else cambc::shared_memory.write(7, std::span{&message_queue.front(), 1});
+        }
+        if (camp_message == 0) {
+            cambc::shared_memory.write(7, std::span{&message_queue.front(), 1});
+        }
+    }
     fuel -= cambc::fuel_remaining();
     std::cout << "Used " << fuel << " fuel." << std::endl;
     
@@ -742,6 +767,7 @@ void Bot::play_turn() {
     if (curr_state == State::TRIB) isTribbing |= 1 << id;
     else isTribbing &= ~(1 << id);
     cambc::shared_memory.write(0, std::span{&isTribbing, 1});
+
 
     if (curr_state != State::FLEE) {
         auto enemies = cambc::vision::champions(team::enemy);

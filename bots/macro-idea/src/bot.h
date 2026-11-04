@@ -3,6 +3,7 @@
 #include "cambc.h"
 #include <cstdint>
 #include <optional>
+#include <queue>
 #include <set>
 #include <vector>
 // Per-champion state survives between turns. Pick one stat and keep buying it.
@@ -38,6 +39,7 @@ public:
     std::vector<uint8_t> camp_group_difficulties;
     std::vector<cambc::bitboard> camp_spawns;
     std::vector<bool> camp_group_in_view;
+    std::queue<uint8_t> message_queue;
     cambc::bitboard difficulty_mask;
     cambc::bitboard goal_mask;
     
