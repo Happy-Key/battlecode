@@ -99,7 +99,37 @@ int dist_to_closest(vec2 position, cambc::bitboard goals) {
     return field.get(position);
 }
 
-bool move_towards_closest(cambc::bitboard goals) {
+std::optional<vec2> get_closest_position_to_bitboard(cambc::bitboard board, cambc::bitboard pixels) {
+    cambc::distance_field field;
+    cambc::bitboard visited;
+    // 1. Compute distances from 'a'
+    field.compute(blocked_tiles(), board, visited);
+
+    std::optional<cambc::vec2> closest_b_pixel = std::nullopt;
+    std::uint16_t min_distance = 0xFFFF;
+
+    for (const cambc::vec2& p : pixels.positions()) {
+        if (visited.is_set(p)) {
+            std::uint16_t dist = field.get(p);
+            
+            if (dist < min_distance) {
+                min_distance = dist;
+                closest_b_pixel = p;
+            }
+        }
+    }
+    return closest_b_pixel;
+}
+
+cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitboard pixels) {
+    cambc::bitboard result;
+    result.clear();
+    auto pos = get_closest_position_to_bitboard(board, pixels);
+    if (pos != std::nullopt) result.set(pos.value());
+    return result;
+}
+
+bool Bot::move_towards_closest(cambc::bitboard goals) {
     auto& me = cambc::self();
     if (!me.can_move() || goals.is_set(me.position()))
         return false;
@@ -109,9 +139,23 @@ bool move_towards_closest(cambc::bitboard goals) {
     //goals &= ~blocked | cambc::vision::camp_tiles();
     if (goals.is_empty())
         return false;
-    if (goals.count() == 1 && !blocked.is_set(goals.positions()[0]))
-        return me.move_towards(goals.positions()[0]);
-
+    if (goals.count() == 1 && !blocked.is_set(goals.positions()[0])) {
+        if (dasher >= 0) {
+            if (me.abilities()[dasher].is_ready()) {
+                auto pos = get_closest_position_to_bitboard(goals, 
+                    blocked_tiles().reachable_tiles(me.position(), 2));
+                if (pos.has_value()) me.abilities()[dasher].use(pos.value());
+            }
+        }
+        return me.move_towards(goals.positions()[0]);  
+    }
+    if (dasher >= 0) {
+        if (me.abilities()[dasher].is_ready()) {
+            auto pos = get_closest_position_to_bitboard(goals, 
+                blocked_tiles().reachable_tiles(me.position(), 2));
+            if (pos.has_value()) me.abilities()[dasher].use(pos.value());
+        }
+    }
     // Expand from the goals until our current tile is reached.
     const auto path_walls = blocked & ~goals;
     cambc::distance_field field;
@@ -132,35 +176,6 @@ bool move_randomly() {
     auto a = blocked.reachable_tiles(me.position(), me.base_stats().base_move_speed).positions();
     std::cout << "im crazy" << std::endl;
     return me.move_absolute(a[random_number(a.size()) + cambc::round_number() % a.size()]);
-}
-
-cambc::bitboard get_closest_pixel_to_bitboard(cambc::bitboard board, cambc::bitboard pixels) {
-    cambc::distance_field field;
-    cambc::bitboard visited;
-    // 1. Compute distances from 'a'
-    field.compute(blocked_tiles(), board, visited);
-
-    // 2. Get the raw pointer to the distance values
-    const std::uint16_t* dist_ptr = field.ptr();
-    std::int32_t map_width = field.width();
-
-    std::optional<cambc::vec2> closest_b_pixel = std::nullopt;
-    std::uint16_t min_distance = 0xFFFF;
-
-    for (const cambc::vec2& p : pixels.positions()) {
-        if (visited.is_set(p)) {
-            std::uint16_t dist = field.get(p);
-            
-            if (dist < min_distance) {
-                min_distance = dist;
-                closest_b_pixel = p;
-            }
-        }
-    }
-    cambc::bitboard result;
-    result.clear();
-    result.set(*closest_b_pixel);
-    return result;
 }
 
 int stat_power(cambc::champion target) {
@@ -226,7 +241,7 @@ void barrage(const Target& target) {
     cambc::bitboard attack_tiles = me.attack_tiles();
     if (me.can_attack() && is_valid_target_in_range(target, attack_tiles)) me.attack(target);
     for (auto a : me.abilities()) {
-        if (a.is_on_cooldown()) continue;
+        if (!a.is_ready()) continue;
         if (a.is_damage() || a.is_cc() || a.is_aoe_damage()) {
             cambc::bitboard tiles_in_range = a.valid_tiles();
             if (is_valid_target_in_range(target, tiles_in_range)) {
@@ -270,7 +285,7 @@ void Bot::farm_camps() {
         }
     }
     if (attack_first_in_range(goal_camps)) return;
-    if (attack_first_in_range(cambc::vision::camps())) return;
+    //if (attack_first_in_range(cambc::vision::camps())) return;
 
     // Cache fixed spawn locations; only visible respawn state changes each turn.
     static const auto camp_groups = [] {
@@ -338,7 +353,7 @@ void Bot::tribute() {
     move_towards_closest(goals);
 }
 
-void fight() {
+void Bot::fight() {
     auto me = cambc::self();
     auto allies = cambc::vision::champions(team::ally);
     auto enemies = cambc::vision::champions(team::enemy);
@@ -366,10 +381,11 @@ void fight() {
             move_towards_closest(cambc::vision::champion_tiles(team::enemy));
         }
         for (auto a : me.abilities()) {
-            if (a.is_on_cooldown()) continue;
+            if (!a.is_ready()) continue;
             if (a.is_dash()) {
-                auto bb = get_closest_pixel_to_bitboard(cambc::vision::champion_tiles(team::enemy), blocked_tiles().reachable_tiles(me.position(), 2));
-                a.use(bb.positions()[0]);
+                auto pos = get_closest_position_to_bitboard(cambc::vision::champion_tiles(team::enemy), 
+                    blocked_tiles().reachable_tiles(me.position(), 2));
+                if (pos.has_value()) a.use(pos.value());
             }
         }
         barrage(enemies[target]);
@@ -384,7 +400,7 @@ void Bot::begin_finding() {
     curr_state = State::FIND;
 }
 
-void go_to_spawn(bool attacked) {
+void Bot::go_to_spawn(bool attacked) {
     auto& me = cambc::self();
     cambc::bitboard ally_spawns = cambc::map::spawn_region(team::ally);
     if (dist_to_closest(me.position(), ally_spawns) <= 5 || attacked) {
@@ -395,7 +411,7 @@ void go_to_spawn(bool attacked) {
     }
 }
 
-void flee() {
+void Bot::flee() {
     auto me = cambc::self();
     auto threats = cambc::vision::champion_tiles(team::enemy) | cambc::vision::awake_camp_tiles();
     if ((threats & tiles_around(me.position(), 8)).is_empty()) {
@@ -641,7 +657,7 @@ void Bot::choose_state() {
                     curr_state = State::TRIB;
                     return;
                 }
-                if (!(cambc::vision::asleep_camp_tiles() & close).is_empty()) return;
+                //if (!(cambc::vision::asleep_camp_tiles() & close).is_empty()) return;
                 begin_finding();
             }
             if (me.gem_count() > 0) {
@@ -716,6 +732,11 @@ void Bot::play_turn() {
         //set_difficulty_mask(stat_power(me));
         for (auto a : good_altars) {
             std::cout << a.x << ", " << a.y << "/";
+        }
+        for (int i = 0; i < me.abilities().size(); i++) {
+            if (me.abilities()[i].is_dash()) {
+                dasher = i;
+            }
         }
 
         contested = ((std::uint8_t)cambc::draft_memory[4] & 1) != 0;
@@ -792,7 +813,7 @@ void Bot::play_turn() {
             }
             std::cout << "test" << std::endl;
             for (cambc::ability a : me.abilities()) {
-                if (a.is_on_cooldown()) continue;
+                if (!a.is_ready()) continue;
                 if (a.is_cc()) {
                     if (!a.valid_tiles().is_set(target.position())) continue;
                     a.use(target);
@@ -809,7 +830,7 @@ void Bot::play_turn() {
         }
     }
     for (auto a : me.abilities()) {
-        if (a.is_on_cooldown()) continue;
+        if (!a.is_ready()) continue;
         if (a.is_shield() || a.is_heal()) {
             if (a.can_target_self()) a.use(me);
             if (a.can_target_allies()) {

@@ -15,6 +15,7 @@ class Bot {
     bool contested = false;
     int spent_gold = 0;
     int build_order_index = 0;
+    int dasher = -1;
     std::vector<cambc::item_type> build_order = {cambc::item_type::jungle_shard_of_strength, 
         cambc::item_type::treasure_shard_of_health, cambc::item_type::monster_shard_of_strength, cambc::item_type::durability_shard_of_health,
         cambc::item_type::collectors_shard_of_strength, cambc::item_type::skirmish_shard_of_health};
@@ -47,6 +48,10 @@ public:
     void choose_state();
     void initialize_id();
     void create_champ_type_id_dicts();
+    bool move_towards_closest(cambc::bitboard goals);
+    void fight();
+    void go_to_spawn(bool attacked);
+    void flee();
     void farm_camps();
     void set_difficulty_mask(int power);
     void calculate_goal_mask();
