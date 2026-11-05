@@ -205,6 +205,20 @@ void Bot::buy_items() {
             if (me.gold_count() >= cambc::consumable_type::altar_lock.cost()) buy_item(cambc::consumable_type::altar_lock);
         }
     }
+    if (me.champion_name() == cambc::champion_type::tavi && me.can_sell()) {
+        int total_gold = me.gold_count();
+        for (auto it = me.item_count().begin(); it < me.item_count().end(); it++) {
+            total_gold += (*it) * (static_cast<cambc::item_type>(it - me.item_count().begin())).cost();
+        }
+        if (total_gold >= 30*25 && me.item_count()[cambc::item_type::greed_emblem_of_focus] < 1) {
+            for (auto it = me.item_count().begin(); it < me.item_count().end(); it++) {
+                auto item = static_cast<cambc::item_type>(it - me.item_count().begin());
+                me.sell(item, me.item_count()[item]);
+            }
+            me.buy(cambc::item_type::enum_type::greed_shard_of_focus, 25);
+            build_order_index = 0;
+        }
+    }
     cambc::item_type item;
     if (build_order_index >= std::size(build_order)){
         item = endgame_build[random_number(std::size(endgame_build))];
@@ -277,6 +291,19 @@ bool attack_first_in_range(const Targets& targets) {
     return false;
 }
 
+bool attack_first_in_range(const cambc::bitboard targets) {
+    auto& me = cambc::self();
+    if (targets.is_empty() || !me.can_attack()) return false;
+    const auto attack_tiles = me.attack_tiles();
+    for (const auto& target : targets.positions()) {
+        if (attack_tiles.is_set(target)) {
+            barrage(cambc::vision::camp_at(target));
+            return true;
+        }
+    }
+    return false;
+}
+
 // Attack a camp already in range, otherwise move toward the nearest camp tiles.
 void Bot::farm_camps() {
     auto goal_camps = cambc::vision::camps();
@@ -287,7 +314,7 @@ void Bot::farm_camps() {
         }
     }
     if (attack_first_in_range(goal_camps)) return;
-    //if (attack_first_in_range(cambc::vision::camps())) return;
+    if (attack_first_in_range(cambc::vision::awake_camp_tiles())) return;
 
     // Cache fixed spawn locations; only visible respawn state changes each turn.
     static const auto camp_groups = [] {
@@ -610,6 +637,7 @@ void Bot::choose_state() {
                 return;
             }
             if (enemy_power > ally_power) curr_state = State::FLEE;
+            if (enemy_power == 0) curr_state = State::FLEE;
         }
         else if (curr_state == State::CLAIM) {
             for (int i = 0; i < get_static_camp_groups().size(); i++) {
@@ -751,6 +779,7 @@ void Bot::play_turn() {
     for (int i = 0; i < camp_group_known_cooldowns.size(); i++) {
         if (camp_group_known_cooldowns[i] > 0) --camp_group_known_cooldowns[i];
     }
+    if (me.champion_name() == cambc::champion_type::tavi) buy_items();
     long fuel = cambc::fuel_remaining();
     std::uint8_t camp_message = 0;
     cambc::shared_memory.read(7, std::span{&camp_message, 1});
@@ -862,7 +891,10 @@ void Bot::play_turn() {
             flee();
             break;
         case State::FIND:
-            if (me.gold_count() >= 160 && me.gold_count() > spent_gold / 2) go_to_spawn(false);
+            if (me.gold_count() >= 160 && me.gold_count() > spent_gold / 2) {
+                if (me.champion_name() == cambc::champion_type::tavi) buy_items();
+                else go_to_spawn(false);
+            }
             if (!move_towards_closest(goal_mask)) {
                 if (!move_randomly()) std::cout << "nooo" << std::endl;
                 calculate_goal_mask();

@@ -138,13 +138,13 @@ std::vector<std::uint8_t> pick_champions() {
     //nyeheh i lied no more random drafts
     switch (cambc::draft::team_size()) {
         case 3:
-            result = {0, 1, 2};
+            result = {0, 11, 2};
             break;
         case 4:
-            result = {0, 1, 2, 7};
+            result = {0, 11, 2, 9};
             break;
         case 5:
-            result = {0, 1, 2, 7, 10};
+            result = {0, 11, 2, 9, 10};
             break;
     }
     return result;
